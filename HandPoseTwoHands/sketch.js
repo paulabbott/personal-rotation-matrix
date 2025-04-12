@@ -14,7 +14,6 @@ let handsLine = [];
 let loaded = false;
 let zOffsetBuffers = [[], []]; // Buffers for smoothing zOffset values
 const SMOOTHING_WINDOW_SIZE = 5; // Size of the smoothing window
-let gridState = Array(4).fill().map(() => Array(4).fill(false)); // 4x4 grid
 let gridRotation = Array(4).fill().map(() => Array(4).fill(0)); // Track rotation state (0, 90, 180, 270 degrees)
 let flashTimers = Array(4).fill().map(() => Array(4).fill(0)); // Track flash timing for each square
 const FLASH_DURATION = 200; // Flash duration in milliseconds
@@ -62,25 +61,23 @@ function draw() {
   squareY = 40;
   gridSize = squareSize / 4;
 
-  // Draw rotated portions for selected squares
+  // Draw rotated portions for all squares
   for (let i = 0; i < 4; i++) {
     for (let j = 0; j < 4; j++) {
-      if (gridState[i][j]) {
-        let x = squareX + j * gridSize;
-        let y = squareY + i * gridSize;
-        
-        // Use the existing buffer instead of creating a new one
-        let buffer = squareBuffers[i][j];
-        buffer.clear();
-        buffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
-        
-        // Draw the rotated square
-        push();
-        translate(x + gridSize/2, y + gridSize/2);
-        rotate(radians(gridRotation[i][j]));
-        image(buffer, -gridSize/2, -gridSize/2);
-        pop();
-      }
+      let x = squareX + j * gridSize;
+      let y = squareY + i * gridSize;
+      
+      // Use the existing buffer
+      let buffer = squareBuffers[i][j];
+      buffer.clear();
+      buffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
+      
+      // Draw the rotated square
+      push();
+      translate(x + gridSize/2, y + gridSize/2);
+      rotate(radians(gridRotation[i][j]));
+      image(buffer, -gridSize/2, -gridSize/2);
+      pop();
     }
   }
 
@@ -200,22 +197,15 @@ function drawHandsLine() {
         // Determine which grid cell the midpoint is in
         let { row, col } = getGridCellIndex(midX, midY, squareX, squareY, gridSize);
         if (row >= 0 && row < 4 && col >= 0 && col < 4) {
-          gridState[row][col] = !gridState[row][col]; // Toggle the cell highlight
-          if (gridState[row][col]) {
-            // Increment rotation by 90 degrees when selected
-            gridRotation[row][col] = (gridRotation[row][col] + 90) % 360;
-            // Start the flash timer
-            flashTimers[row][col] = FLASH_DURATION;
-          }
+          // Increment rotation by 90 degrees when pinched
+          gridRotation[row][col] = (gridRotation[row][col] + 90) % 360;
+          // Start the flash timer
+          flashTimers[row][col] = FLASH_DURATION;
         }
 
         // Set pinch as active
         pinchActive[i] = true;
         lastPinchTime[i] = currentTime;
-
-        // Log the state arrays
-        console.log('gridState:', gridState);
-        console.log('pinchActive:', pinchActive);
       }
     } else {
       // Reset pinch state when pinch is released
