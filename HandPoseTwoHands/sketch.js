@@ -15,11 +15,15 @@ let loaded = false;
 let zOffsetBuffers = [[], []]; // Buffers for smoothing zOffset values
 const SMOOTHING_WINDOW_SIZE = 5; // Size of the smoothing window
 let gridState = Array(4).fill().map(() => Array(4).fill(false)); // 4x4 grid
+let gridRotation = Array(4).fill().map(() => Array(4).fill(0)); // Track rotation state (0, 90, 180, 270 degrees)
+let flashTimers = Array(4).fill().map(() => Array(4).fill(0)); // Track flash timing for each square
+const FLASH_DURATION = 200; // Flash duration in milliseconds
 let squareX, squareY, gridSize; // Declare as global variables
 let pinchActive = [false, false]; // Array to track pinch state for each hand
 let pinchDistBuffers = [[], []]; // Buffers for smoothing pinchDist values
 let lastPinchTime = [0, 0]; // Array to track the last pinch time for each hand
 const DEBOUNCE_TIME = 300; // Debounce time in milliseconds
+let squareBuffers = Array(4).fill().map(() => Array(4).fill(null)); // Reusable graphics buffers for each square
 
 
 function preload() {
@@ -37,26 +41,59 @@ function setup() {
   video.size(640, 480);
   video.hide();
   handPose.detectStart(video, gotHands);
+
+  // Initialize graphics buffers
+  let squareSize = height - 80;
+  gridSize = squareSize / 4;
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      squareBuffers[i][j] = createGraphics(gridSize, gridSize);
+    }
+  }
 }
 
 function draw() {
-
+  // Draw the full video feed first
   image(video, 0, 0, width, height);
 
-  // Draw a white opaque square in the center
+  // Calculate grid dimensions
   let squareSize = height - 80; // 40px away from top and bottom
   squareX = (width - squareSize) / 2;
   squareY = 40;
   gridSize = squareSize / 4;
 
-  // Draw grid with highlighted cells
+  // Draw rotated portions for selected squares
   for (let i = 0; i < 4; i++) {
     for (let j = 0; j < 4; j++) {
       if (gridState[i][j]) {
-        fill(255, 165, 0, 150); // Orange highlight color
-      } else {
-        fill(255, 255, 255, 200); // Default color
+        let x = squareX + j * gridSize;
+        let y = squareY + i * gridSize;
+        
+        // Use the existing buffer instead of creating a new one
+        let buffer = squareBuffers[i][j];
+        buffer.clear();
+        buffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
+        
+        // Draw the rotated square
+        push();
+        translate(x + gridSize/2, y + gridSize/2);
+        rotate(radians(gridRotation[i][j]));
+        image(buffer, -gridSize/2, -gridSize/2);
+        pop();
       }
+    }
+  }
+
+  // Draw grid overlay with flashing effect
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      let alpha = 0;
+      if (flashTimers[i][j] > 0) {
+        // Calculate alpha based on time remaining
+        alpha = map(flashTimers[i][j], FLASH_DURATION, 0, 200, 0);
+        flashTimers[i][j] -= deltaTime;
+      }
+      fill(255, 255, 255, alpha);
       rect(squareX + j * gridSize, squareY + i * gridSize, gridSize, gridSize);
     }
   }
@@ -71,7 +108,6 @@ function draw() {
     line(squareX, squareY + i * gridSize, squareX + squareSize, squareY + i * gridSize);
   }
 
-  // drawKeypoints();
   drawHandsLine();
 }
 
@@ -86,18 +122,26 @@ function getGridCellIndex(x, y, squareX, squareY, gridSize) {
 }
 
 function drawHandsLine() {
-
   for (let i = 0; i < hands.length; i++) {
     let hand = hands[i];
     let keypoints = hand.keypoints;
     let indexF = keypoints[8]; // Index finger tip
     let thumb = keypoints[4]; // Thumb tip
 
-    // fill(255, 255, 0, 127); // Yellow with 50% opacity
-    // noStroke();
-    // ellipse(indexF.x, indexF.y, 10, 10);
-    // fill(255, 0, 0, 127); // Red with 50% opacity
-    // ellipse(thumb.x, thumb.y, 10, 10);
+    // Draw palm triangle using wrist (0), index finger base (5), and pinky base (17)
+    let wrist = keypoints[0];
+    let indexBase = keypoints[5];
+    let pinkyBase = keypoints[17];
+
+    // Draw the triangle
+    stroke(255, 0, 0); // Red color for the triangle
+    strokeWeight(2);
+    noFill();
+    triangle(
+      wrist.x, wrist.y,
+      indexBase.x, indexBase.y,
+      pinkyBase.x, pinkyBase.y
+    );
 
     // Draw a line between the thumb and index finger
     stroke(0, 0, 0);
@@ -145,27 +189,33 @@ function drawHandsLine() {
 
     // zOffset is acting as our threshold value to determine if a pinch has happened
     let pinchThreshold = smoothedZOffset / 1.25;
-    // Draw a pink dot at the midpoint with size based on smoothed zOffset
-    // stroke(255, 105, 180); // Pink color
     stroke(0, 0, 0);
     noFill();
     ellipse(midX, midY, pinchThreshold, pinchThreshold);
     noStroke();
 
-
-
     if (smoothedPinchDist < pinchThreshold) {
       let currentTime = millis();
-      if (!pinchActive[i] && (currentTime - lastPinchTime[i] > DEBOUNCE_TIME)) { // Only detect a new pinch if not already active and debounce time has passed
+      if (!pinchActive[i] && (currentTime - lastPinchTime[i] > DEBOUNCE_TIME)) {
         // Determine which grid cell the midpoint is in
         let { row, col } = getGridCellIndex(midX, midY, squareX, squareY, gridSize);
         if (row >= 0 && row < 4 && col >= 0 && col < 4) {
           gridState[row][col] = !gridState[row][col]; // Toggle the cell highlight
+          if (gridState[row][col]) {
+            // Increment rotation by 90 degrees when selected
+            gridRotation[row][col] = (gridRotation[row][col] + 90) % 360;
+            // Start the flash timer
+            flashTimers[row][col] = FLASH_DURATION;
+          }
         }
 
         // Set pinch as active
         pinchActive[i] = true;
-        lastPinchTime[i] = currentTime; // Update the last pinch time
+        lastPinchTime[i] = currentTime;
+
+        // Log the state arrays
+        console.log('gridState:', gridState);
+        console.log('pinchActive:', pinchActive);
       }
     } else {
       // Reset pinch state when pinch is released
@@ -186,4 +236,10 @@ function drawKeypoints() {
     }
   }
 }
+
+// Note: For better performance with many rotations, consider implementing a WebGL shader version:
+// 1. Create a shader program that handles the rotation
+// 2. Pass the video texture and rotation angles to the shader
+// 3. Use instanced rendering for the grid squares
+// This would significantly reduce CPU usage and improve performance for complex scenes.
 
