@@ -11,8 +11,6 @@ let handPose;
 let video;
 let videoProcess; // Downsampled copy for processing
 let hands = [];
-let handsLine = [];
-let loaded = false;
 let zOffsetBuffers = [[], []]; // Buffers for smoothing zOffset values
 const SMOOTHING_WINDOW_SIZE = 5; // Size of the smoothing window
 let gridRotation = Array(4).fill().map(() => Array(4).fill(0)); // Track rotation state (0, 90, 180, 270 degrees)
@@ -28,11 +26,14 @@ let sharedBuffer = null; // Single shared graphics buffer
 // Grid configuration
 const GRID_ROWS = 4; // Number of rows in the grid
 const GRID_COLS = 4; // Number of columns in the grid
-const TOP_MARGIN = 40; // Distance from top of canvas in pixels
-const BOTTOM_MARGIN = 40; // Distance from bottom of canvas in pixels
+const TOP_MARGIN = 80; // Distance from top of canvas in pixels
+const BOTTOM_MARGIN = 200; // Distance from bottom of canvas in pixels
 
 // Processing configuration
-const PROCESS_SCALE = 0.1; // Scale factor for processing video
+const PROCESS_WIDTH = 320; // Fixed width for processing video
+let processScale; // Will be calculated based on PROCESS_WIDTH
+let videoScaleX, videoScaleY; // Added for video scale calculation
+let handTrackingScale; // Added for hand tracking scale calculation
 
 function preload() {
   //can set number of hands to detect
@@ -44,6 +45,12 @@ function preload() {
 }
 
 function setup() {
+  // First create a temporary video capture to get native resolution
+  let tempVideo = createCapture(VIDEO, { flipped: true }, function() {
+    console.log('Hardware webcam resolution:', tempVideo.width, 'x', tempVideo.height);
+    tempVideo.remove(); // Remove the temporary video after getting resolution
+  });
+
   // Calculate dimensions based on viewport height while maintaining 4:3 aspect ratio
   let canvasHeight = windowHeight;
   let canvasWidth = (canvasHeight * 4) / 3;
@@ -52,28 +59,68 @@ function setup() {
   createCanvas(canvasWidth, canvasHeight);
   select('canvas').position(0, 0);
   
-  // Create full resolution video for display
-  video = createCapture(VIDEO, { flipped: true }, function() {
-    // This callback runs after the video is loaded
-    console.log('Webcam native resolution:', video.width, 'x', video.height);
-  });
-  video.size(canvasWidth, canvasHeight);
+  // Create video capture at fixed 640x480 resolution
+  video = createCapture(VIDEO, { flipped: true });
+  video.size(640, 480);
   video.hide();
 
+  // Calculate video scale factors
+  videoScaleX = canvasWidth / 640;
+  videoScaleY = canvasHeight / 480;
+
+  // Calculate processing height maintaining aspect ratio
+  let processHeight = (PROCESS_WIDTH * 3) / 4;
+  
+  // Calculate scale factor based on the new video width
+  processScale = PROCESS_WIDTH / 640; // Now based on 640px video width
+
+  // Calculate hand tracking scale factor (processing video to canvas)
+  handTrackingScale = {
+    x: canvasWidth / PROCESS_WIDTH,
+    y: canvasHeight / processHeight
+  };
+
   // Create downsampled copy for processing
-  videoProcess = createCapture(VIDEO, { flipped: true }, function() {
-    // This callback runs after the video is loaded
-    console.log('Processing video resolution:', videoProcess.width, 'x', videoProcess.height);
-  });
-  videoProcess.size(canvasWidth * PROCESS_SCALE, canvasHeight * PROCESS_SCALE);
+  videoProcess = createCapture(VIDEO, { flipped: true });
+  videoProcess.size(PROCESS_WIDTH, processHeight);
   videoProcess.hide();
 
   // Start hand tracking on the downsampled video
   handPose.detectStart(videoProcess, gotHands);
 
-  // Initialize single shared buffer
-  let squareSize = canvasHeight - (TOP_MARGIN + BOTTOM_MARGIN);
+  // Initialize grid dimensions
+  updateGridDimensions();
+
+  // Add window resize handler
+  window.addEventListener('resize', function() {
+    // Recalculate canvas dimensions
+    let newCanvasHeight = windowHeight;
+    let newCanvasWidth = (newCanvasHeight * 4) / 3;
+    resizeCanvas(newCanvasWidth, newCanvasHeight);
+    
+    // Update video scales
+    videoScaleX = newCanvasWidth / 640;
+    videoScaleY = newCanvasHeight / 480;
+    handTrackingScale = {
+      x: newCanvasWidth / PROCESS_WIDTH,
+      y: newCanvasHeight / processHeight
+    };
+    
+    // Update grid dimensions
+    updateGridDimensions();
+  });
+}
+
+function updateGridDimensions() {
+  let squareSize = height - (TOP_MARGIN + BOTTOM_MARGIN);
+  squareX = (width - squareSize) / 2;
+  squareY = TOP_MARGIN;
   gridSize = squareSize / GRID_ROWS;
+  
+  // Properly dispose of old buffer if it exists
+  if (sharedBuffer) {
+    sharedBuffer.remove();
+  }
   sharedBuffer = createGraphics(gridSize, gridSize);
 }
 
@@ -95,7 +142,27 @@ function draw() {
       
       // Reuse the same buffer for all squares
       sharedBuffer.clear();
-      sharedBuffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
+      sharedBuffer.image(video, 
+        0, 0, 
+        gridSize, gridSize, 
+        x / videoScaleX, y / videoScaleY, 
+        gridSize / videoScaleX, gridSize / videoScaleY
+      );
+      
+      // Apply rotation if needed
+      if (gridRotation[i][j] !== 0) {
+        sharedBuffer.push();
+        sharedBuffer.translate(gridSize/2, gridSize/2);
+        sharedBuffer.rotate(radians(gridRotation[i][j]));
+        sharedBuffer.translate(-gridSize/2, -gridSize/2);
+        sharedBuffer.image(video, 
+          0, 0, 
+          gridSize, gridSize, 
+          x / videoScaleX, y / videoScaleY, 
+          gridSize / videoScaleX, gridSize / videoScaleY
+        );
+        sharedBuffer.pop();
+      }
       
       // Draw the rotated square
       push();
@@ -130,7 +197,7 @@ function draw() {
     line(squareX, squareY + i * gridSize, squareX + squareSize, squareY + i * gridSize);
   }
 
-  drawHandsLine(PROCESS_SCALE);
+  drawHandsLine(processScale);
 }
 
 function gotHands(results) {
@@ -150,32 +217,36 @@ function drawHandsLine(scale) {
     let indexF = keypoints[8]; // Index finger tip
     let thumb = keypoints[4]; // Thumb tip
 
-    // Scale up the coordinates from the processed video to match display size
+    // Scale up the coordinates from the processed video to match canvas size
     let scaledIndexF = {
-      x: indexF.x / scale,
-      y: indexF.y / scale
+      x: indexF.x * handTrackingScale.x,
+      y: indexF.y * handTrackingScale.y
     };
     let scaledThumb = {
-      x: thumb.x / scale,
-      y: thumb.y / scale
+      x: thumb.x * handTrackingScale.x,
+      y: thumb.y * handTrackingScale.y
     };
 
     // Draw palm triangle using wrist (0), index finger base (5), and pinky base (17)
     let wrist = {
-      x: keypoints[0].x / scale,
-      y: keypoints[0].y / scale
+      x: keypoints[0].x * handTrackingScale.x,
+      y: keypoints[0].y * handTrackingScale.y
     };
     let indexBase = {
-      x: keypoints[5].x / scale,
-      y: keypoints[5].y / scale
+      x: keypoints[5].x * handTrackingScale.x,
+      y: keypoints[5].y * handTrackingScale.y
     };
     let pinkyBase = {
-      x: keypoints[17].x / scale,
-      y: keypoints[17].y / scale
+      x: keypoints[17].x * handTrackingScale.x,
+      y: keypoints[17].y * handTrackingScale.y
     };
 
-    // Calculate hand size for normalization
-    let handSize = dist(wrist.x, wrist.y, keypoints[9].x / scale, keypoints[9].y / scale);
+    // Calculate hand size once and reuse
+    let middleFinger = {
+      x: keypoints[9].x * handTrackingScale.x,
+      y: keypoints[9].y * handTrackingScale.y
+    };
+    let handSize = dist(wrist.x, wrist.y, middleFinger.x, middleFinger.y);
     
     // Calculate normalized triangle dimensions
     let palmWidth = dist(indexBase.x, indexBase.y, pinkyBase.x, pinkyBase.y) / handSize;
@@ -201,9 +272,8 @@ function drawHandsLine(scale) {
     let midX = (scaledThumb.x + scaledIndexF.x) / 2;
     let midY = (scaledThumb.y + scaledIndexF.y) / 2;
 
-    //get the distance between the top and bottom of the palm to give us an estimate of how far the hand is from the camera
-    let avgHandSize = dist(wrist.x, wrist.y, keypoints[9].x / scale, keypoints[9].y / scale);
-    let zOffset = map(avgHandSize, 50, 200, 20, 80); // Dynamically adjust based on hand size
+    // zOffset is acting as our threshold value to determine if a pinch has happened
+    let zOffset = map(handSize, 50, 200, 20, 80); // Dynamically adjust based on hand size
 
     // Add zOffset to the buffer and maintain the buffer size
     zOffsetBuffers[i].push(zOffset);
@@ -232,6 +302,7 @@ function drawHandsLine(scale) {
     textSize(16);
     if (i === 0) { // Left hand
       text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, 10, 20);
+      text(`Display: ${video.width}x${video.height} | Process: ${videoProcess.width}x${videoProcess.height}`, 10, 40);
     } else if (i === 1) { // Right hand
       text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, width - 300, 20);
     }
@@ -266,22 +337,37 @@ function drawHandsLine(scale) {
   }
 }
 
-function drawKeypoints() {
-  // loop through key points on each hand and draw a circle at each point
-  for (let i = 0; i < hands.length; i++) {
-    let hand = hands[i];
-    for (let j = 0; j < hand.keypoints.length; j++) {
-      let keypoint = hand.keypoints[j];
-      fill(128, 128, 128);
-      noStroke();
-      circle(keypoint.x, keypoint.y, 10);
-    }
-  }
-}
-
 // Note: For better performance with many rotations, consider implementing a WebGL shader version:
 // 1. Create a shader program that handles the rotation
 // 2. Pass the video texture and rotation angles to the shader
 // 3. Use instanced rendering for the grid squares
 // This would significantly reduce CPU usage and improve performance for complex scenes.
+
+// Add cleanup function
+function windowCleared() {
+  // Stop hand tracking
+  if (handPose) {
+    handPose.detectStop();
+  }
+  
+  // Remove video captures
+  if (video) {
+    video.remove();
+  }
+  if (videoProcess) {
+    videoProcess.remove();
+  }
+  
+  // Clear buffers
+  zOffsetBuffers = [[], []];
+  pinchDistBuffers = [[], []];
+  
+  // Remove shared buffer
+  if (sharedBuffer) {
+    sharedBuffer.remove();
+  }
+}
+
+// Add event listener for page unload
+window.addEventListener('beforeunload', windowCleared);
 
