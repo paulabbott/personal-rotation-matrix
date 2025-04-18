@@ -9,6 +9,7 @@ pinched fingers on two hands
 
 let handPose;
 let video;
+let videoProcess; // Downsampled copy for processing
 let hands = [];
 let handsLine = [];
 let loaded = false;
@@ -22,68 +23,92 @@ let pinchActive = [false, false]; // Array to track pinch state for each hand
 let pinchDistBuffers = [[], []]; // Buffers for smoothing pinchDist values
 let lastPinchTime = [0, 0]; // Array to track the last pinch time for each hand
 const DEBOUNCE_TIME = 300; // Debounce time in milliseconds
-let squareBuffers = Array(4).fill().map(() => Array(4).fill(null)); // Reusable graphics buffers for each square
+let sharedBuffer = null; // Single shared graphics buffer
 
+// Grid configuration
+const GRID_ROWS = 4; // Number of rows in the grid
+const GRID_COLS = 4; // Number of columns in the grid
+const TOP_MARGIN = 40; // Distance from top of canvas in pixels
+const BOTTOM_MARGIN = 40; // Distance from bottom of canvas in pixels
+
+// Processing configuration
+const PROCESS_SCALE = 0.1; // Scale factor for processing video
 
 function preload() {
   //can set number of hands to detect
   let options = {
-    maxHands: 4,
+    maxHands: 2,
     flipped: true // make it like a mirror 
   }
   handPose = ml5.handPose(options);
 }
 
 function setup() {
-  createCanvas(640, 480);
-  video = createCapture(VIDEO, { flipped: true }); //make it like a mirror
-  video.size(640, 480);
+  // Calculate dimensions based on viewport height while maintaining 4:3 aspect ratio
+  let canvasHeight = windowHeight;
+  let canvasWidth = (canvasHeight * 4) / 3;
+  
+  // Create canvas with calculated dimensions
+  createCanvas(canvasWidth, canvasHeight);
+  select('canvas').position(0, 0);
+  
+  // Create full resolution video for display
+  video = createCapture(VIDEO, { flipped: true }, function() {
+    // This callback runs after the video is loaded
+    console.log('Webcam native resolution:', video.width, 'x', video.height);
+  });
+  video.size(canvasWidth, canvasHeight);
   video.hide();
-  handPose.detectStart(video, gotHands);
 
-  // Initialize graphics buffers
-  let squareSize = height - 80;
-  gridSize = squareSize / 4;
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 4; j++) {
-      squareBuffers[i][j] = createGraphics(gridSize, gridSize);
-    }
-  }
+  // Create downsampled copy for processing
+  videoProcess = createCapture(VIDEO, { flipped: true }, function() {
+    // This callback runs after the video is loaded
+    console.log('Processing video resolution:', videoProcess.width, 'x', videoProcess.height);
+  });
+  videoProcess.size(canvasWidth * PROCESS_SCALE, canvasHeight * PROCESS_SCALE);
+  videoProcess.hide();
+
+  // Start hand tracking on the downsampled video
+  handPose.detectStart(videoProcess, gotHands);
+
+  // Initialize single shared buffer
+  let squareSize = canvasHeight - (TOP_MARGIN + BOTTOM_MARGIN);
+  gridSize = squareSize / GRID_ROWS;
+  sharedBuffer = createGraphics(gridSize, gridSize);
 }
 
 function draw() {
-  // Draw the full video feed first
+  // Draw the full resolution video feed
   image(video, 0, 0, width, height);
 
   // Calculate grid dimensions
-  let squareSize = height - 80; // 40px away from top and bottom
+  let squareSize = height - (TOP_MARGIN + BOTTOM_MARGIN);
   squareX = (width - squareSize) / 2;
-  squareY = 40;
-  gridSize = squareSize / 4;
+  squareY = TOP_MARGIN;
+  gridSize = squareSize / GRID_ROWS;
 
-  // Draw rotated portions for all squares
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 4; j++) {
+  // Draw rotated portions for all squares using shared buffer
+  for (let i = 0; i < GRID_ROWS; i++) {
+    for (let j = 0; j < GRID_COLS; j++) {
       let x = squareX + j * gridSize;
       let y = squareY + i * gridSize;
       
-      // Use the existing buffer
-      let buffer = squareBuffers[i][j];
-      buffer.clear();
-      buffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
+      // Reuse the same buffer for all squares
+      sharedBuffer.clear();
+      sharedBuffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
       
       // Draw the rotated square
       push();
       translate(x + gridSize/2, y + gridSize/2);
       rotate(radians(gridRotation[i][j]));
-      image(buffer, -gridSize/2, -gridSize/2);
+      image(sharedBuffer, -gridSize/2, -gridSize/2);
       pop();
     }
   }
 
   // Draw grid overlay with flashing effect
-  for (let i = 0; i < 4; i++) {
-    for (let j = 0; j < 4; j++) {
+  for (let i = 0; i < GRID_ROWS; i++) {
+    for (let j = 0; j < GRID_COLS; j++) {
       let alpha = 0;
       if (flashTimers[i][j] > 0) {
         // Calculate alpha based on time remaining
@@ -95,17 +120,17 @@ function draw() {
     }
   }
 
-  // Subdivide the square into a 4x4 grid with light grey lines
+  // Subdivide the square into a grid with light grey lines
   stroke(200); // Light grey color
   strokeWeight(1);
-  for (let i = 1; i < 4; i++) {
+  for (let i = 1; i < GRID_ROWS; i++) {
     // Vertical lines
     line(squareX + i * gridSize, squareY, squareX + i * gridSize, squareY + squareSize);
     // Horizontal lines
     line(squareX, squareY + i * gridSize, squareX + squareSize, squareY + i * gridSize);
   }
 
-  drawHandsLine();
+  drawHandsLine(PROCESS_SCALE);
 }
 
 function gotHands(results) {
@@ -118,17 +143,44 @@ function getGridCellIndex(x, y, squareX, squareY, gridSize) {
   return { row, col };
 }
 
-function drawHandsLine() {
+function drawHandsLine(scale) {
   for (let i = 0; i < hands.length; i++) {
     let hand = hands[i];
     let keypoints = hand.keypoints;
     let indexF = keypoints[8]; // Index finger tip
     let thumb = keypoints[4]; // Thumb tip
 
+    // Scale up the coordinates from the processed video to match display size
+    let scaledIndexF = {
+      x: indexF.x / scale,
+      y: indexF.y / scale
+    };
+    let scaledThumb = {
+      x: thumb.x / scale,
+      y: thumb.y / scale
+    };
+
     // Draw palm triangle using wrist (0), index finger base (5), and pinky base (17)
-    let wrist = keypoints[0];
-    let indexBase = keypoints[5];
-    let pinkyBase = keypoints[17];
+    let wrist = {
+      x: keypoints[0].x / scale,
+      y: keypoints[0].y / scale
+    };
+    let indexBase = {
+      x: keypoints[5].x / scale,
+      y: keypoints[5].y / scale
+    };
+    let pinkyBase = {
+      x: keypoints[17].x / scale,
+      y: keypoints[17].y / scale
+    };
+
+    // Calculate hand size for normalization
+    let handSize = dist(wrist.x, wrist.y, keypoints[9].x / scale, keypoints[9].y / scale);
+    
+    // Calculate normalized triangle dimensions
+    let palmWidth = dist(indexBase.x, indexBase.y, pinkyBase.x, pinkyBase.y) / handSize;
+    let palmHeight = dist(wrist.x, wrist.y, (indexBase.x + pinkyBase.x) / 2, (indexBase.y + pinkyBase.y) / 2) / handSize;
+    let palmArea = (palmWidth * palmHeight) / 2;
 
     // Draw the triangle
     stroke(255, 0, 0); // Red color for the triangle
@@ -143,14 +195,14 @@ function drawHandsLine() {
     // Draw a line between the thumb and index finger
     stroke(0, 0, 0);
     strokeWeight(2);
-    line(thumb.x, thumb.y, indexF.x, indexF.y);
+    line(scaledThumb.x, scaledThumb.y, scaledIndexF.x, scaledIndexF.y);
 
     // Calculate the midpoint
-    let midX = (thumb.x + indexF.x) / 2;
-    let midY = (thumb.y + indexF.y) / 2;
+    let midX = (scaledThumb.x + scaledIndexF.x) / 2;
+    let midY = (scaledThumb.y + scaledIndexF.y) / 2;
 
     //get the distance between the top and bottom of the palm to give us an estimate of how far the hand is from the camera
-    let avgHandSize = dist(keypoints[0].x, keypoints[0].y, keypoints[9].x, keypoints[9].y);
+    let avgHandSize = dist(wrist.x, wrist.y, keypoints[9].x / scale, keypoints[9].y / scale);
     let zOffset = map(avgHandSize, 50, 200, 20, 80); // Dynamically adjust based on hand size
 
     // Add zOffset to the buffer and maintain the buffer size
@@ -163,7 +215,7 @@ function drawHandsLine() {
     let smoothedZOffset = zOffsetBuffers[i].reduce((sum, val) => sum + val, 0) / zOffsetBuffers[i].length;
 
     //measure distance between thumb and index finger
-    let pinchDist = dist(thumb.x, thumb.y, indexF.x, indexF.y);
+    let pinchDist = dist(scaledThumb.x, scaledThumb.y, scaledIndexF.x, scaledIndexF.y);
 
     // Add pinchDist to the buffer and maintain the buffer size
     pinchDistBuffers[i].push(pinchDist);
@@ -174,18 +226,18 @@ function drawHandsLine() {
     // Calculate the smoothed pinchDist
     let smoothedPinchDist = pinchDistBuffers[i].reduce((sum, val) => sum + val, 0) / pinchDistBuffers[i].length;
 
-    // Display smoothed zOffset and pinchDist values
+    // Display smoothed zOffset, pinchDist, and palm area values
     noStroke();    
     fill(255);
     textSize(16);
     if (i === 0) { // Left hand
-      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)}`, 10, 20);
+      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, 10, 20);
     } else if (i === 1) { // Right hand
-      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)}`, width - 200, 20);
+      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, width - 300, 20);
     }
 
     // zOffset is acting as our threshold value to determine if a pinch has happened
-    let pinchThreshold = smoothedZOffset / 1.25;
+    let pinchThreshold = smoothedZOffset / 2;
     stroke(0, 0, 0);
     noFill();
     ellipse(midX, midY, pinchThreshold, pinchThreshold);
