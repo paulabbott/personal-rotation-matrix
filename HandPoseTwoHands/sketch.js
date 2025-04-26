@@ -24,15 +24,25 @@ let pinchDistBuffers = [[], []]; // Buffers for smoothing pinchDist values
 let lastPinchTime = [0, 0]; // Array to track the last pinch time for each hand
 const DEBOUNCE_TIME = 300; // Debounce time in milliseconds
 let sharedBuffer = null; // Single shared graphics buffer
+let showInfo = false; // Toggle for displaying information
+
+// Animation frame control
+let lastFrameTime = 0;
+const TARGET_FPS = 60;
+const FRAME_TIME = 1000 / TARGET_FPS;
+let windowSizeChanged = false;
 
 // Grid configuration
 const GRID_ROWS = 4; // Number of rows in the grid
 const GRID_COLS = 4; // Number of columns in the grid
 const TOP_MARGIN = 40; // Distance from top of canvas in pixels
-const BOTTOM_MARGIN = 40; // Distance from bottom of canvas in pixels
+const BOTTOM_MARGIN = 200; // Distance from bottom of canvas in pixels
 
 // Processing configuration
-const PROCESS_SCALE = 0.1; // Scale factor for processing video
+const PROCESS_WIDTH = 320; // Fixed width for processing video
+let processScale; // Will be calculated based on PROCESS_WIDTH
+let videoScaleX, videoScaleY; // Added for video scale calculation
+let handTrackingScale; // Added for hand tracking scale calculation
 
 function preload() {
   //can set number of hands to detect
@@ -75,62 +85,102 @@ function setup() {
   let squareSize = canvasHeight - (TOP_MARGIN + BOTTOM_MARGIN);
   gridSize = squareSize / GRID_ROWS;
   sharedBuffer = createGraphics(gridSize, gridSize);
+
+  // Add window resize handler
+  window.addEventListener('resize', function() {
+    windowSizeChanged = true;
+    // Recalculate canvas dimensions
+    let newCanvasHeight = windowHeight;
+    let newCanvasWidth = (newCanvasHeight * 4) / 3;
+    resizeCanvas(newCanvasWidth, newCanvasHeight);
+    
+    // Update video scales
+    videoScaleX = newCanvasWidth / 640;
+    videoScaleY = newCanvasHeight / 480;
+    handTrackingScale = {
+      x: newCanvasWidth / PROCESS_WIDTH,
+      y: newCanvasHeight / processHeight
+    };
+  });
 }
 
 function draw() {
-  // Draw the full resolution video feed
-  image(video, 0, 0, width, height);
+  const currentTime = performance.now();
+  const deltaTime = currentTime - lastFrameTime;
+  
+  // Only draw if enough time has passed
+  if (deltaTime >= FRAME_TIME) {
+    // Draw the full resolution video feed
+    image(video, 0, 0, width, height);
 
-  // Calculate grid dimensions
-  let squareSize = height - (TOP_MARGIN + BOTTOM_MARGIN);
-  squareX = (width - squareSize) / 2;
-  squareY = TOP_MARGIN;
-  gridSize = squareSize / GRID_ROWS;
-
-  // Draw rotated portions for all squares using shared buffer
-  for (let i = 0; i < GRID_ROWS; i++) {
-    for (let j = 0; j < GRID_COLS; j++) {
-      let x = squareX + j * gridSize;
-      let y = squareY + i * gridSize;
-      
-      // Reuse the same buffer for all squares
-      sharedBuffer.clear();
-      sharedBuffer.image(video, 0, 0, gridSize, gridSize, x, y, gridSize, gridSize);
-      
-      // Draw the rotated square
-      push();
-      translate(x + gridSize/2, y + gridSize/2);
-      rotate(radians(gridRotation[i][j]));
-      image(sharedBuffer, -gridSize/2, -gridSize/2);
-      pop();
+    // Only recalculate grid dimensions if window size changed
+    if (windowSizeChanged) {
+      updateGridDimensions();
+      windowSizeChanged = false;
     }
-  }
 
-  // Draw grid overlay with flashing effect
-  for (let i = 0; i < GRID_ROWS; i++) {
-    for (let j = 0; j < GRID_COLS; j++) {
-      let alpha = 0;
-      if (flashTimers[i][j] > 0) {
-        // Calculate alpha based on time remaining
-        alpha = map(flashTimers[i][j], FLASH_DURATION, 0, 200, 0);
-        flashTimers[i][j] -= deltaTime;
+    // Draw the grid
+    let squareSize = height - (TOP_MARGIN + BOTTOM_MARGIN);
+    squareX = (width - squareSize) / 2;
+    squareY = TOP_MARGIN;
+    gridSize = squareSize / GRID_ROWS;
+
+    // Draw the grid squares
+    for (let i = 0; i < GRID_ROWS; i++) {
+      for (let j = 0; j < GRID_ROWS; j++) {
+        let x = squareX + j * gridSize;
+        let y = squareY + i * gridSize;
+
+        // Reuse the same buffer for all squares
+        sharedBuffer.clear();
+        sharedBuffer.image(video, 
+          0, 0, 
+          gridSize, gridSize, 
+          x / videoScaleX, y / videoScaleY, 
+          gridSize / videoScaleX, gridSize / videoScaleY
+        );
+        
+        // Apply rotation if needed
+        if (gridRotation[i][j] !== 0) {
+          sharedBuffer.push();
+          sharedBuffer.translate(gridSize/2, gridSize/2);
+          sharedBuffer.rotate(radians(gridRotation[i][j]));
+          sharedBuffer.translate(-gridSize/2, -gridSize/2);
+          sharedBuffer.image(video, 
+            0, 0, 
+            gridSize, gridSize, 
+            x / videoScaleX, y / videoScaleY, 
+            gridSize / videoScaleX, gridSize / videoScaleY
+          );
+          sharedBuffer.pop();
+        }
+
+        // Draw the rotated square
+        image(sharedBuffer, x, y);
+
+        // Draw the grid lines
+        stroke(200);
+        strokeWeight(1);
+        noFill();
+        rect(x, y, gridSize, gridSize);
+
+        // Handle flash effect
+        if (flashTimers[i][j] > 0) {
+          fill(255, 255, 255, flashTimers[i][j]);
+          noStroke();
+          rect(x, y, gridSize, gridSize);
+          flashTimers[i][j] -= deltaTime;
+        }
       }
-      fill(255, 255, 255, alpha);
-      rect(squareX + j * gridSize, squareY + i * gridSize, gridSize, gridSize);
     }
-  }
 
-  // Subdivide the square into a grid with light grey lines
-  stroke(200); // Light grey color
-  strokeWeight(1);
-  for (let i = 1; i < GRID_ROWS; i++) {
-    // Vertical lines
-    line(squareX + i * gridSize, squareY, squareX + i * gridSize, squareY + squareSize);
-    // Horizontal lines
-    line(squareX, squareY + i * gridSize, squareX + squareSize, squareY + i * gridSize);
-  }
+    // Draw the hand tracking visualization
+    drawHandsLine(processScale);
 
-  drawHandsLine(PROCESS_SCALE);
+    lastFrameTime = currentTime;
+  }
+  
+  requestAnimationFrame(draw);
 }
 
 function gotHands(results) {
@@ -182,15 +232,17 @@ function drawHandsLine(scale) {
     let palmHeight = dist(wrist.x, wrist.y, (indexBase.x + pinkyBase.x) / 2, (indexBase.y + pinkyBase.y) / 2) / handSize;
     let palmArea = (palmWidth * palmHeight) / 2;
 
-    // Draw the triangle
-    stroke(255, 0, 0); // Red color for the triangle
-    strokeWeight(2);
-    noFill();
-    triangle(
-      wrist.x, wrist.y,
-      indexBase.x, indexBase.y,
-      pinkyBase.x, pinkyBase.y
-    );
+    // Draw the triangle only if showInfo is true
+    if (showInfo) {
+      stroke(255, 0, 0); // Red color for the triangle
+      strokeWeight(2);
+      noFill();
+      triangle(
+        wrist.x, wrist.y,
+        indexBase.x, indexBase.y,
+        pinkyBase.x, pinkyBase.y
+      );
+    }
 
     // Draw a line between the thumb and index finger
     stroke(0, 0, 0);
@@ -230,10 +282,13 @@ function drawHandsLine(scale) {
     noStroke();    
     fill(255);
     textSize(16);
-    if (i === 0) { // Left hand
-      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, 10, 20);
-    } else if (i === 1) { // Right hand
-      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, width - 300, 20);
+    if (showInfo) {
+      if (i === 0) { // Left hand
+        text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, 10, 20);
+        text(`Display: ${video.width}x${video.height} | Process: ${videoProcess.width}x${videoProcess.height}`, 10, 40);
+      } else if (i === 1) { // Right hand
+        text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, width - 300, 20);
+      }
     }
 
     // zOffset is acting as our threshold value to determine if a pinch has happened
@@ -276,6 +331,13 @@ function drawKeypoints() {
       noStroke();
       circle(keypoint.x, keypoint.y, 10);
     }
+  }
+}
+
+function keyPressed() {
+  if (key === 'i' || key === 'I') {
+    showInfo = !showInfo;
+    console.log('Info display toggled:', showInfo);
   }
 }
 

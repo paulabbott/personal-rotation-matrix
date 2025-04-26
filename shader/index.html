@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Display with Shader</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #000;
+        }
+        .container {
+            position: relative;
+            width: 50%;
+            height: 100vh;
+            overflow: hidden;
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+        .overlay {
+            pointer-events: none;
+            z-index: 1;
+        }
+        #video {
+            transform: scaleX(-1);
+        }
+        #shaderOverlayCanvas {
+            transform: scaleX(-1);
+        }
+    </style>
+</head>
+<body>
+    <div id="videoContainer" class="container">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="overlayCanvas" class="overlay"></canvas>
+    </div>
+    <div id="shaderContainer" class="container">
+        <canvas id="canvas"></canvas>
+        <canvas id="shaderOverlayCanvas" class="overlay"></canvas>
+    </div>
+    <script>
+        class WebGLContext {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.gl = canvas.getContext('webgl');
+                if (!this.gl) {
+                    throw new Error('WebGL not supported');
+                }
+                this.program = null;
+                this.texture = null;
+                this.buffers = {};
+            }
+
+            createShader(type, source) {
+                const shader = this.gl.createShader(type);
+                this.gl.shaderSource(shader, source);
+                this.gl.compileShader(shader);
+                
+                if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+                    throw new Error(`Shader compilation error: ${this.gl.getShaderInfoLog(shader)}`);
+                }
+                
+                return shader;
+            }
+
+            createProgram(vertexSource, fragmentSource) {
+                const vertexShader = this.createShader(this.gl.VERTEX_SHADER, vertexSource);
+                const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, fragmentSource);
+                
+                const program = this.gl.createProgram();
+                this.gl.attachShader(program, vertexShader);
+                this.gl.attachShader(program, fragmentShader);
+                this.gl.linkProgram(program);
+                
+                if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+                    throw new Error(`Program linking error: ${this.gl.getProgramInfoLog(program)}`);
+                }
+                
+                this.program = program;
+                this.gl.useProgram(program);
+                return program;
+            }
+
+            createTexture() {
+                const texture = this.gl.createTexture();
+                this.gl.bindTexture(this.gl.TEXTURE_2D, texture);
+                this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+                this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+                this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
+                this.texture = texture;
+                return texture;
+            }
+
+            createBuffer(data, target = this.gl.ARRAY_BUFFER) {
+                const buffer = this.gl.createBuffer();
+                this.gl.bindBuffer(target, buffer);
+                this.gl.bufferData(target, data, this.gl.STATIC_DRAW);
+                return buffer;
+            }
+
+            setUniform(name, type, ...values) {
+                const location = this.gl.getUniformLocation(this.program, name);
+                if (location === null) return;
+                
+                switch (type) {
+                    case '2f':
+                        this.gl.uniform2f(location, ...values);
+                        break;
+                    case '1f':
+                        this.gl.uniform1f(location, ...values);
+                        break;
+                    // Add more uniform types as needed
+                }
+            }
+
+            setAttribute(name, buffer, size) {
+                const location = this.gl.getAttribLocation(this.program, name);
+                if (location === -1) return;
+                
+                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, buffer);
+                this.gl.enableVertexAttribArray(location);
+                this.gl.vertexAttribPointer(location, size, this.gl.FLOAT, false, 0, 0);
+            }
+        }
+
+        class VideoProcessor {
+            constructor(videoElement, overlayCanvas, shaderCanvas, shaderOverlayCanvas) {
+                this.video = videoElement;
+                this.overlayCanvas = overlayCanvas;
+                this.shaderCanvas = shaderCanvas;
+                this.shaderOverlayCanvas = shaderOverlayCanvas;
+                this.glContext = new WebGLContext(shaderCanvas);
+                this.ctx = overlayCanvas.getContext('2d');
+                this.shaderCtx = shaderOverlayCanvas.getContext('2d');
+                this.gridSize = 4;
+                this.squareSize = 0;
+                this.setup();
+            }
+
+            async setup() {
+                try {
+                    const constraints = {
+                        video: {
+                            facingMode: 'user',  // Use front camera
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        }
+                    };
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    this.video.srcObject = stream;
+                    
+                    await new Promise((resolve) => {
+                        this.video.addEventListener('loadedmetadata', resolve);
+                    });
+                    
+                    this.initializeWebGL();
+                    this.setupEventListeners();
+                    this.startRendering();
+                } catch (error) {
+                    console.error('Error setting up video:', error);
+                }
+            }
+
+            initializeWebGL() {
+                const vertexShaderSource = `
+                    attribute vec2 a_position;
+                    attribute vec2 a_texCoord;
+                    varying vec2 v_texCoord;
+                    void main() {
+                        gl_Position = vec4(a_position, 0, 1);
+                        v_texCoord = a_texCoord;
+                    }
+                `;
+                
+                const fragmentShaderSource = `
+                    precision mediump float;
+                    varying vec2 v_texCoord;
+                    uniform sampler2D u_texture;
+                    uniform vec2 u_squarePos[16];
+                    uniform vec2 u_squareSize[16];
+                    uniform float u_squareRotation[16];
+                    
+                    vec2 rotate(vec2 coord, float angle) {
+                        float s = sin(angle);
+                        float c = cos(angle);
+                        return vec2(
+                            coord.x * c - coord.y * s,
+                            coord.x * s + coord.y * c
+                        );
+                    }
+                    
+                    void main() {
+                        vec2 coord = v_texCoord;
+                        
+                        // Flip the entire image horizontally
+                        coord.x = 1.0 - coord.x;
+                        
+                        // Check each square
+                        for (int i = 0; i < 16; i++) {
+                            if (coord.x >= u_squarePos[i].x && 
+                                coord.x <= u_squarePos[i].x + u_squareSize[i].x &&
+                                coord.y >= u_squarePos[i].y && 
+                                coord.y <= u_squarePos[i].y + u_squareSize[i].y) {
+                                
+                                // Convert to local coordinates (0 to 1)
+                                vec2 localCoord = (coord - u_squarePos[i]) / u_squareSize[i];
+                                
+                                // Center the coordinates (-0.5 to 0.5)
+                                localCoord = localCoord - vec2(0.5);
+                                
+                                // Rotate
+                                localCoord = rotate(localCoord, u_squareRotation[i]);
+                                
+                                // Move back to 0 to 1 range
+                                localCoord = localCoord + vec2(0.5);
+                                
+                                // Convert back to texture coordinates
+                                coord = u_squarePos[i] + localCoord * u_squareSize[i];
+                            }
+                        }
+                        
+                        gl_FragColor = texture2D(u_texture, coord);
+                    }
+                `;
+
+                this.glContext.createProgram(vertexShaderSource, fragmentShaderSource);
+                this.glContext.createTexture();
+                
+                const positions = new Float32Array([
+                    -1.0, -1.0,
+                     1.0, -1.0,
+                    -1.0,  1.0,
+                     1.0,  1.0,
+                ]);
+                
+                const texCoords = new Float32Array([
+                    0.0, 1.0,
+                    1.0, 1.0,
+                    0.0, 0.0,
+                    1.0, 0.0,
+                ]);
+                
+                this.glContext.buffers.position = this.glContext.createBuffer(positions);
+                this.glContext.buffers.texCoord = this.glContext.createBuffer(texCoords);
+            }
+
+            setupEventListeners() {
+                this.video.addEventListener('loadeddata', () => this.updateCanvasSizes());
+                window.addEventListener('resize', () => this.updateCanvasSizes());
+            }
+
+            updateCanvasSizes() {
+                const container = this.video.parentElement;
+                const containerWidth = container.clientWidth;
+                const containerHeight = container.clientHeight;
+                
+                const videoAspect = this.video.videoWidth / this.video.videoHeight;
+                let videoWidth, videoHeight;
+                
+                if (videoAspect > containerWidth / containerHeight) {
+                    videoWidth = containerWidth;
+                    videoHeight = videoWidth / videoAspect;
+                } else {
+                    videoHeight = containerHeight;
+                    videoWidth = videoHeight * videoAspect;
+                }
+                
+                this.overlayCanvas.width = videoWidth;
+                this.overlayCanvas.height = videoHeight;
+                this.shaderCanvas.width = this.video.videoWidth;
+                this.shaderCanvas.height = this.video.videoHeight;
+                this.shaderOverlayCanvas.width = videoWidth;
+                this.shaderOverlayCanvas.height = videoHeight;
+                
+                this.glContext.gl.viewport(0, 0, this.shaderCanvas.width, this.shaderCanvas.height);
+                this.drawSquares();
+            }
+
+            drawSquares() {
+                // Draw on left overlay
+                this.ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+                
+                // Calculate square size based on grid
+                const padding = 1; // pixels between squares
+                const totalPadding = padding * (this.gridSize + 1);
+                const availableWidth = this.overlayCanvas.width - totalPadding;
+                const availableHeight = this.overlayCanvas.height - totalPadding;
+                this.squareSize = Math.min(
+                    availableWidth / this.gridSize,
+                    availableHeight / this.gridSize
+                );
+                
+                // Calculate total grid width and horizontal centering offset
+                const totalGridWidth = (this.squareSize * this.gridSize) + (padding * (this.gridSize - 1));
+                const horizontalOffset = (this.overlayCanvas.width - totalGridWidth) / 2;
+                
+                // Draw grid of squares on left overlay
+                for (let row = 0; row < this.gridSize; row++) {
+                    for (let col = 0; col < this.gridSize; col++) {
+                        const x = horizontalOffset + padding + col * (this.squareSize + padding);
+                        const y = padding + row * (this.squareSize + padding);
+                        
+                        this.ctx.strokeStyle = 'white';
+                        this.ctx.lineWidth = 1;
+                        this.ctx.strokeRect(x, y, this.squareSize, this.squareSize);
+                    }
+                }
+
+                // Draw on right overlay
+                this.shaderCtx.clearRect(0, 0, this.shaderOverlayCanvas.width, this.shaderOverlayCanvas.height);
+                
+                // Draw grid of squares on right overlay
+                for (let row = 0; row < this.gridSize; row++) {
+                    for (let col = 0; col < this.gridSize; col++) {
+                        const x = horizontalOffset + padding + col * (this.squareSize + padding);
+                        const y = padding + row * (this.squareSize + padding);
+                        
+                        this.shaderCtx.strokeStyle = 'white';
+                        this.shaderCtx.lineWidth = 1;
+                        this.shaderCtx.strokeRect(x, y, this.squareSize, this.squareSize);
+                    }
+                }
+            }
+
+            render() {
+                if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
+                    const gl = this.glContext.gl;
+                    
+                    gl.bindTexture(gl.TEXTURE_2D, this.glContext.texture);
+                    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
+                    
+                    gl.clearColor(0, 0, 0, 1);
+                    gl.clear(gl.COLOR_BUFFER_BIT);
+                    
+                    this.glContext.setAttribute('a_position', this.glContext.buffers.position, 2);
+                    this.glContext.setAttribute('a_texCoord', this.glContext.buffers.texCoord, 2);
+                    
+                    // Calculate positions and rotations for all squares
+                    const squarePositions = [];
+                    const squareSizes = [];
+                    const squareRotations = [];
+                    const padding = 1;
+                    
+                    // Calculate total grid width and horizontal centering offset
+                    const totalGridWidth = (this.squareSize * this.gridSize) + (padding * (this.gridSize - 1));
+                    const horizontalOffset = (this.overlayCanvas.width - totalGridWidth) / 2;
+                    
+                    for (let row = 0; row < this.gridSize; row++) {
+                        for (let col = 0; col < this.gridSize; col++) {
+                            const x = (horizontalOffset + padding + col * (this.squareSize + padding)) / this.overlayCanvas.width;
+                            const y = (padding + row * (this.squareSize + padding)) / this.overlayCanvas.height;
+                            const width = this.squareSize / this.overlayCanvas.width;
+                            const height = this.squareSize / this.overlayCanvas.height;
+                            
+                            squarePositions.push(x, y);
+                            squareSizes.push(width, height);
+                            
+                            // Assign different rotations to each square
+                            const index = row * this.gridSize + col;
+                            const rotation = (index % 4) * Math.PI / 2; // 0, 90, 180, 270 degrees
+                            squareRotations.push(rotation);
+                        }
+                    }
+                    
+                    // Set uniform arrays
+                    for (let i = 0; i < 16; i++) {
+                        this.glContext.setUniform(`u_squarePos[${i}]`, '2f', 
+                            squarePositions[i * 2], 
+                            squarePositions[i * 2 + 1]
+                        );
+                        this.glContext.setUniform(`u_squareSize[${i}]`, '2f', 
+                            squareSizes[i * 2], 
+                            squareSizes[i * 2 + 1]
+                        );
+                        this.glContext.setUniform(`u_squareRotation[${i}]`, '1f', 
+                            squareRotations[i]
+                        );
+                    }
+                    
+                    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+                }
+                
+                requestAnimationFrame(() => this.render());
+            }
+
+            startRendering() {
+                this.render();
+            }
+        }
+
+        // Initialize the application
+        const videoProcessor = new VideoProcessor(
+            document.getElementById('video'),
+            document.getElementById('overlayCanvas'),
+            document.getElementById('canvas'),
+            document.getElementById('shaderOverlayCanvas')
+        );
+    </script>
+</body>
+</html>
