@@ -267,14 +267,18 @@
                 const containerHeight = container.clientHeight;
                 
                 const videoAspect = this.video.videoWidth / this.video.videoHeight;
+                const containerAspect = containerWidth / containerHeight;
                 let videoWidth, videoHeight;
                 
-                if (videoAspect > containerWidth / containerHeight) {
-                    videoWidth = containerWidth;
-                    videoHeight = videoWidth / videoAspect;
-                } else {
+                // Scale to fill container while maintaining aspect ratio
+                if (videoAspect > containerAspect) {
+                    // Video is wider than container, scale by height
                     videoHeight = containerHeight;
                     videoWidth = videoHeight * videoAspect;
+                } else {
+                    // Video is taller than container, scale by width
+                    videoWidth = containerWidth;
+                    videoHeight = videoWidth / videoAspect;
                 }
                 
                 // Log the dimensions
