@@ -34,6 +34,7 @@
         }
         #video {
             transform: scaleX(-1);
+            border: 2px solid red;
         }
         #shaderOverlayCanvas {
             transform: scaleX(-1);
@@ -275,6 +276,22 @@
                     videoHeight = containerHeight;
                     videoWidth = videoHeight * videoAspect;
                 }
+                
+                // Log the dimensions
+                console.log('Video dimensions:', {
+                    original: {
+                        width: this.video.videoWidth,
+                        height: this.video.videoHeight
+                    },
+                    scaled: {
+                        width: videoWidth,
+                        height: videoHeight
+                    },
+                    container: {
+                        width: containerWidth,
+                        height: containerHeight
+                    }
+                });
                 
                 this.overlayCanvas.width = videoWidth;
                 this.overlayCanvas.height = videoHeight;
