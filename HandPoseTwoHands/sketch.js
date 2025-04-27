@@ -22,6 +22,7 @@ let pinchDistBuffers = [[], []]; // Buffers for smoothing pinchDist values
 let lastPinchTime = [0, 0]; // Array to track the last pinch time for each hand
 const DEBOUNCE_TIME = 300; // Debounce time in milliseconds
 let sharedBuffer = null; // Single shared graphics buffer
+let debugInfoVisible = true; // Track if debug information should be shown
 
 // Grid configuration
 const GRID_ROWS = 4; // Number of rows in the grid
@@ -253,15 +254,17 @@ function drawHandsLine(scale) {
     let palmHeight = dist(wrist.x, wrist.y, (indexBase.x + pinkyBase.x) / 2, (indexBase.y + pinkyBase.y) / 2) / handSize;
     let palmArea = (palmWidth * palmHeight) / 2;
 
-    // Draw the triangle
-    stroke(255, 0, 0); // Red color for the triangle
-    strokeWeight(2);
-    noFill();
-    triangle(
-      wrist.x, wrist.y,
-      indexBase.x, indexBase.y,
-      pinkyBase.x, pinkyBase.y
-    );
+    // Draw the triangle only if debug info is visible
+    if (debugInfoVisible) {
+      stroke(255, 0, 0); // Red color for the triangle
+      strokeWeight(2);
+      noFill();
+      triangle(
+        wrist.x, wrist.y,
+        indexBase.x, indexBase.y,
+        pinkyBase.x, pinkyBase.y
+      );
+    }
 
     // Draw a line between the thumb and index finger
     stroke(0, 0, 0);
@@ -296,15 +299,17 @@ function drawHandsLine(scale) {
     // Calculate the smoothed pinchDist
     let smoothedPinchDist = pinchDistBuffers[i].reduce((sum, val) => sum + val, 0) / pinchDistBuffers[i].length;
 
-    // Display smoothed zOffset, pinchDist, and palm area values
-    noStroke();    
-    fill(255);
-    textSize(16);
-    if (i === 0) { // Left hand
-      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, 10, 20);
-      text(`Display: ${video.width}x${video.height} | Process: ${videoProcess.width}x${videoProcess.height}`, 10, 40);
-    } else if (i === 1) { // Right hand
-      text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, width - 300, 20);
+    // Display smoothed zOffset, pinchDist, and palm area values only if debug info is visible
+    if (debugInfoVisible) {
+      noStroke();    
+      fill(255);
+      textSize(16);
+      if (i === 0) { // Left hand
+        text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, 10, 20);
+        text(`Display: ${video.width}x${video.height} | Process: ${videoProcess.width}x${videoProcess.height}`, 10, 40);
+      } else if (i === 1) { // Right hand
+        text(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | palmArea: ${palmArea.toFixed(4)}`, width - 300, 20);
+      }
     }
 
     // zOffset is acting as our threshold value to determine if a pinch has happened
@@ -334,6 +339,13 @@ function drawHandsLine(scale) {
       // Reset pinch state when pinch is released
       pinchActive[i] = false;
     }
+  }
+}
+
+// Add keyPressed function to toggle debug info
+function keyPressed() {
+  if (key === 'd' || key === 'D') {
+    debugInfoVisible = !debugInfoVisible;
   }
 }
 
