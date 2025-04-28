@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>MediaPipe Hands – Switchable Model</title>
+  <!-- 1) TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+  <!-- 2) Hand-Pose-Detection -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+  <!-- 3) MediaPipe Hands runtime -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      font-family: sans-serif;
+    }
+    .wrapper {
+      position: relative;
+    }
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    #status {
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>MediaPipe Hands Demo</h1>
+  <div class="wrapper">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="canvas"></canvas>
+  </div>
+  <div id="status">Initializing…</div>
+
+  <script>
+    // ── Configuration ─────────────────────────────────────────────────────────
+    const MODEL_TYPE = 'full';  // 'lite' for speed, 'full' for accuracy
+    const MAX_HANDS  = 2;       // number of hands to detect
+
+    // offscreen processing resolution
+    const OFF_W = 320, OFF_H = 240;
+
+    // ── DOM References ────────────────────────────────────────────────────────
+    const video  = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx    = canvas.getContext('2d');
+    const status = document.getElementById('status');
+
+    // offscreen canvas and context
+    const offscreen = document.createElement('canvas');
+    const offctx    = offscreen.getContext('2d');
+    offscreen.width  = OFF_W;
+    offscreen.height = OFF_H;
+
+    // pre-defined skeleton connections (21-point hand)
+    const skeleton = [
+      [0,1],[1,2],[2,3],[3,4],
+      [0,5],[5,6],[6,7],[7,8],
+      [0,9],[9,10],[10,11],[11,12],
+      [0,13],[13,14],[14,15],[15,16],
+      [0,17],[17,18],[18,19],[19,20]
+    ];
+
+    // ── Setup WebGL Backend ───────────────────────────────────────────────────
+    async function setupBackend() {
+      await tf.setBackend('webgl');
+      await tf.ready();
+    }
+
+    // ── Configure and start webcam ────────────────────────────────────────────
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+
+      // get true camera resolution
+      const vw = video.videoWidth, vh = video.videoHeight;
+      document.querySelector('.wrapper').style.width  = vw + 'px';
+      document.querySelector('.wrapper').style.height = vh + 'px';
+
+      // size overlay canvas to match display
+      canvas.width  = vw;
+      canvas.height = vh;
+
+      video.play();
+    }
+
+    // ── Create the detector ────────────────────────────────────────────────────
+    function createDetector() {
+      return handPoseDetection.createDetector(
+        handPoseDetection.SupportedModels.MediaPipeHands,
+        {
+          runtime:      'mediapipe',
+          solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands',
+          modelType:    MODEL_TYPE,
+          maxHands:     MAX_HANDS
+        }
+      );
+    }
+
+    // ── Draw results, scaling from OFF_W×OFF_H → full canvas ─────────────────
+    function drawResults(hands) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const sx = canvas.width  / OFF_W;
+      const sy = canvas.height / OFF_H;
+
+      hands.forEach(hand => {
+        // draw keypoints
+        hand.keypoints.forEach(pt => {
+          const x = pt.x * sx, y = pt.y * sy;
+          ctx.beginPath();
+          ctx.arc(x, y, 5, 0, 2 * Math.PI);
+          ctx.fillStyle = 'red';
+          ctx.fill();
+        });
+        // draw skeleton
+        ctx.strokeStyle = 'lime';
+        ctx.lineWidth   = 2;
+        skeleton.forEach(([i, j]) => {
+          const p1 = hand.keypoints[i], p2 = hand.keypoints[j];
+          ctx.beginPath();
+          ctx.moveTo(p1.x * sx, p1.y * sy);
+          ctx.lineTo(p2.x * sx, p2.y * sy);
+          ctx.stroke();
+        });
+      });
+    }
+
+    // ── Run detection loop at ~30 FPS ─────────────────────────────────────────
+    function startDetection(detector) {
+      const FRAME_INTERVAL = 1000 / 30; // ≈33ms
+      let lastTime = 0;
+
+      async function loop(now) {
+        if (now - lastTime > FRAME_INTERVAL) {
+          lastTime = now;
+          // draw trimmed video to offscreen
+          offctx.drawImage(video, 0, 0, OFF_W, OFF_H);
+          // detect hands
+          const hands = await detector.estimateHands(offscreen, { flipHorizontal: true });
+          status.textContent = `Detected ${hands.length} hand(s)`;
+          drawResults(hands);
+        }
+        requestAnimationFrame(loop);
+      }
+
+      requestAnimationFrame(loop);
+    }
+
+    // ── Bootstrap Everything ──────────────────────────────────────────────────
+    (async () => {
+      await setupBackend();
+      status.textContent = 'Backend ready — starting camera…';
+      await setupCamera();
+      status.textContent = 'Camera ready — loading model…';
+      const detector = await createDetector();
+      status.textContent = 'Model loaded — warming up…';
+      // warm-up inference
+      offctx.drawImage(video, 0, 0, OFF_W, OFF_H);
+      await detector.estimateHands(offscreen, { flipHorizontal: true });
+      status.textContent = 'Warm-up done — detecting hands!';
+      startDetection(detector);
+    })();
+  </script>
+</body>
+</html>
