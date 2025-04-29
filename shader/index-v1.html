@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Webcam Display with Shader</title>
+    <!-- 1) TensorFlow.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+    <!-- 2) Hand-Pose-Detection -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/hand-pose-detection"></script>
+    <!-- 3) MediaPipe Hands runtime -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
     <style>
         body {
             margin: 0;
@@ -51,6 +57,54 @@
         <canvas id="shaderOverlayCanvas" class="overlay"></canvas>
     </div>
     <script>
+        // ── Hand Tracking Configuration ────────────────────────────────────────
+        const MODEL_TYPE = 'lite';  // 'lite' for speed, 'full' for accuracy
+        const MAX_HANDS = 2;        // number of hands to detect
+        const OFF_W = 256;          // reduced processing width for better performance
+        const OFF_H = 192;          // reduced processing height for better performance
+        const DETECTION_INTERVAL = 3; // process every 3 frames
+
+        // pre-defined skeleton connections (21-point hand)
+        const skeleton = [
+            [0,1],[1,2],[2,3],[3,4],     // thumb
+            [0,5],[5,6],[6,7],[7,8],     // index finger
+            [0,9],[9,10],[10,11],[11,12], // middle finger
+            [0,13],[13,14],[14,15],[15,16], // ring finger
+            [0,17],[17,18],[18,19],[19,20]  // pinky
+        ];
+
+        // ── Hand Tracking Setup Functions ─────────────────────────────────────
+        async function setupBackend() {
+            await tf.setBackend('webgl');
+            await tf.ready();
+        }
+
+        async function setupCamera(videoElement) {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: {
+                    facingMode: 'user',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                } 
+            });
+            videoElement.srcObject = stream;
+            await new Promise(r => videoElement.onloadedmetadata = r);
+            videoElement.play();
+            return videoElement;
+        }
+
+        async function createDetector() {
+            return handPoseDetection.createDetector(
+                handPoseDetection.SupportedModels.MediaPipeHands,
+                {
+                    runtime: 'mediapipe',
+                    solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/hands',
+                    modelType: MODEL_TYPE,
+                    maxHands: MAX_HANDS
+                }
+            );
+        }
+
         class WebGLContext {
             constructor(canvas) {
                 this.canvas = canvas;
@@ -146,30 +200,54 @@
                 this.shaderCtx = shaderOverlayCanvas.getContext('2d');
                 this.gridSize = 4;
                 this.squareSize = 0;
+
+                // Hand tracking properties
+                this.detector = null;
+                this.offscreen = document.createElement('canvas');
+                this.offctx = this.offscreen.getContext('2d');
+                this.offscreen.width = OFF_W;
+                this.offscreen.height = OFF_H;
+                this.hands = [];
+                this.frameCount = 0;
+                
                 this.setup();
             }
 
             async setup() {
                 try {
-                    const constraints = {
+                    // First setup the video stream
+                    const stream = await navigator.mediaDevices.getUserMedia({
                         video: {
-                            facingMode: 'user',  // Use front camera
+                            facingMode: 'user',
                             width: { ideal: 1280 },
                             height: { ideal: 720 }
                         }
-                    };
-                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    });
                     this.video.srcObject = stream;
                     
                     await new Promise((resolve) => {
                         this.video.addEventListener('loadedmetadata', resolve);
                     });
-                    
+
+                    // Initialize WebGL and shaders first
                     this.initializeWebGL();
                     this.setupEventListeners();
                     this.startRendering();
+
+                    // Then setup hand tracking in the background
+                    this.setupHandTracking();
                 } catch (error) {
                     console.error('Error setting up video:', error);
+                }
+            }
+
+            async setupHandTracking() {
+                try {
+                    await setupBackend();
+                    this.detector = await createDetector();
+                    console.log('Hand tracking initialized');
+                } catch (error) {
+                    console.error('Error setting up hand tracking:', error);
                 }
             }
 
@@ -354,6 +432,67 @@
                 }
             }
 
+            // Draw hand landmarks and skeleton
+            drawHands(hands) {
+                const ctx = this.overlayCanvas.getContext('2d');
+                
+                // Clear the canvas
+                ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+                
+                if (!hands || hands.length === 0) return;
+
+                const sx = this.overlayCanvas.width / OFF_W;
+                const sy = this.overlayCanvas.height / OFF_H;
+
+                // Optimize drawing by using a single path for all keypoints
+                ctx.beginPath();
+                hands.forEach(hand => {
+                    hand.keypoints.forEach(pt => {
+                        const x = pt.x * sx;
+                        const y = pt.y * sy;
+                        ctx.moveTo(x + 5, y);
+                        ctx.arc(x, y, 5, 0, 2 * Math.PI);
+                    });
+                });
+                ctx.fillStyle = 'red';
+                ctx.fill();
+
+                // Draw skeleton
+                ctx.strokeStyle = 'lime';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                hands.forEach(hand => {
+                    skeleton.forEach(([i, j]) => {
+                        const p1 = hand.keypoints[i];
+                        const p2 = hand.keypoints[j];
+                        ctx.moveTo(p1.x * sx, p1.y * sy);
+                        ctx.lineTo(p2.x * sx, p2.y * sy);
+                    });
+                });
+                ctx.stroke();
+            }
+
+            async detectHands() {
+                if (!this.detector) return;
+                
+                // Only process every DETECTION_INTERVAL frames
+                this.frameCount++;
+                if (this.frameCount % DETECTION_INTERVAL !== 0) return;
+                
+                // Draw video to offscreen canvas with lower quality for better performance
+                this.offctx.imageSmoothingEnabled = false;
+                this.offctx.drawImage(this.video, 0, 0, OFF_W, OFF_H);
+                
+                // Detect hands
+                try {
+                    this.hands = await this.detector.estimateHands(this.offscreen, { 
+                        flipHorizontal: true 
+                    });
+                } catch (error) {
+                    console.error('Error detecting hands:', error);
+                }
+            }
+
             render() {
                 if (this.video.readyState === this.video.HAVE_ENOUGH_DATA) {
                     const gl = this.glContext.gl;
@@ -410,6 +549,10 @@
                     }
                     
                     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+                    // Detect and draw hands
+                    this.detectHands();
+                    this.drawHands(this.hands);
                 }
                 
                 requestAnimationFrame(() => this.render());

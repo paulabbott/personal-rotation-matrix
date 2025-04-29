@@ -13,11 +13,14 @@
     body {
       display: flex;
       flex-direction: column;
-      align-items: center;
+      align-items: flex-start;
       font-family: sans-serif;
+      margin: 0;
+      padding: 0;
     }
     .wrapper {
       position: relative;
+      width: 50vw;
     }
     video, canvas {
       position: absolute;
@@ -34,18 +37,13 @@
       height: 100%;
       pointer-events: none;
     }
-    #status {
-      margin-top: 1rem;
-    }
   </style>
 </head>
 <body>
-  <h1>MediaPipe Hands Demo</h1>
   <div class="wrapper">
     <video id="video" autoplay playsinline muted></video>
     <canvas id="canvas"></canvas>
   </div>
-  <div id="status">Initializing…</div>
 
   <script>
     // ── Configuration ─────────────────────────────────────────────────────────
@@ -59,7 +57,6 @@
     const video  = document.getElementById('video');
     const canvas = document.getElementById('canvas');
     const ctx    = canvas.getContext('2d');
-    const status = document.getElementById('status');
 
     // offscreen canvas and context
     const offscreen = document.createElement('canvas');
@@ -90,12 +87,20 @@
 
       // get true camera resolution
       const vw = video.videoWidth, vh = video.videoHeight;
-      document.querySelector('.wrapper').style.width  = vw + 'px';
-      document.querySelector('.wrapper').style.height = vh + 'px';
-
+      
+      // Calculate aspect ratio
+      const aspectRatio = vw / vh;
+      
+      // Set wrapper height based on width and aspect ratio
+      const wrapper = document.querySelector('.wrapper');
+      const wrapperWidth = wrapper.offsetWidth;
+      const wrapperHeight = wrapperWidth / aspectRatio;
+      
+      wrapper.style.height = wrapperHeight + 'px';
+      
       // size overlay canvas to match display
-      canvas.width  = vw;
-      canvas.height = vh;
+      canvas.width  = wrapperWidth;
+      canvas.height = wrapperHeight;
 
       video.play();
     }
@@ -153,7 +158,6 @@
           offctx.drawImage(video, 0, 0, OFF_W, OFF_H);
           // detect hands
           const hands = await detector.estimateHands(offscreen, { flipHorizontal: true });
-          status.textContent = `Detected ${hands.length} hand(s)`;
           drawResults(hands);
         }
         requestAnimationFrame(loop);
@@ -165,15 +169,11 @@
     // ── Bootstrap Everything ──────────────────────────────────────────────────
     (async () => {
       await setupBackend();
-      status.textContent = 'Backend ready — starting camera…';
       await setupCamera();
-      status.textContent = 'Camera ready — loading model…';
       const detector = await createDetector();
-      status.textContent = 'Model loaded — warming up…';
       // warm-up inference
       offctx.drawImage(video, 0, 0, OFF_W, OFF_H);
       await detector.estimateHands(offscreen, { flipHorizontal: true });
-      status.textContent = 'Warm-up done — detecting hands!';
       startDetection(detector);
     })();
   </script>
