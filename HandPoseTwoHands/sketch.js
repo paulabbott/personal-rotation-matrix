@@ -224,6 +224,9 @@ function drawHandsLine() {
     ellipse(midX, midY, pinchThreshold, pinchThreshold);
     noStroke();
 
+    //this is slightly laggy because we are using the smoothedPinchDist to determine if a pinch has happened
+    //we should use the raw pinchDist value to determine if a pinch has happened   
+    //maybe we should be smoothing the threshold value instead of the pinchDist value
     if (smoothedPinchDist < pinchThreshold) {
       let currentTime = millis();
       if (!pinchActive[i] && (currentTime - lastPinchTime[i] > DEBOUNCE_TIME)) {
