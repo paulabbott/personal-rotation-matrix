@@ -1,10 +1,11 @@
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('DOMContentLoaded');
-    const videoProcessor = new VideoProcessor(
-        document.getElementById('video'),
-        document.getElementById('overlayCanvas'),
-        document.getElementById('canvas'),
-        document.getElementById('shaderOverlayCanvas')
-    );
+    const video = document.getElementById('video');
+    const gridCanvas = document.getElementById('gridCanvas');
+    const handCanvas = document.getElementById('handCanvas');
+    const canvas = document.getElementById('canvas');
+    const shaderOverlayCanvas = document.getElementById('shaderOverlayCanvas');
+    const rightHandCanvas = document.getElementById('rightHandCanvas');
+
+    const videoProcessor = new VideoProcessor(video, gridCanvas, handCanvas, canvas, shaderOverlayCanvas, rightHandCanvas);
 }); 

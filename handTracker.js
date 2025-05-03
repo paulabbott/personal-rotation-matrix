@@ -1,8 +1,10 @@
 class HandTracker {
-    constructor(videoElement, overlayCanvas) {
+    constructor(videoElement, leftHandCanvas, rightHandCanvas) {
         this.video = videoElement;
-        this.overlayCanvas = overlayCanvas;
-        this.ctx = overlayCanvas.getContext('2d');
+        this.leftHandCanvas = leftHandCanvas;
+        this.rightHandCanvas = rightHandCanvas;
+        this.leftCtx = leftHandCanvas.getContext('2d');
+        this.rightCtx = rightHandCanvas.getContext('2d');
         
         // Hand tracking properties
         this.detector = null;
@@ -14,8 +16,8 @@ class HandTracker {
         this.frameCount = 0;
 
         // Pinch detection state
-        this.zOffsetBuffers = [[], []]; // Buffers for smoothing zOffset values
-        this.pinchDistBuffers = [[], []]; // Buffers for smoothing pinchDist values
+        this.zOffset = [0, 0]; // Raw z-offset values for each hand
+        this.pinchDist = [0, 0]; // Raw pinch distance values for each hand
         this.pinchActive = [false, false]; // Track pinch state for each hand
         this.lastPinchTime = [0, 0]; // Track the last pinch time for each hand
         this.lastPinchCell = [null, null]; // Track the last cell where pinch occurred
@@ -32,73 +34,77 @@ class HandTracker {
     }
 
     drawHands(hands) {
-        // Clear the canvas
-        this.ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
+        // Clear both canvases
+        this.leftCtx.clearRect(0, 0, this.leftHandCanvas.width, this.leftHandCanvas.height);
+        this.rightCtx.clearRect(0, 0, this.rightHandCanvas.width, this.rightHandCanvas.height);
 
         if (!hands || hands.length === 0) return;
 
-        const sx = this.overlayCanvas.width / OFF_W;
-        const sy = this.overlayCanvas.height / OFF_H;
+        const sx = this.leftHandCanvas.width / OFF_W;
+        const sy = this.leftHandCanvas.height / OFF_H;
 
         hands.forEach((hand, handIndex) => {
             // Get thumb and index finger positions
             const thumb = hand.keypoints[4];
             const indexFinger = hand.keypoints[8];
 
-            // Get smoothed values for visualization
-            const smoothedZOffset = getSmoothedValue(this.zOffsetBuffers[handIndex]);
-            const smoothedPinchDist = getSmoothedValue(this.pinchDistBuffers[handIndex]);
-            const pinchThreshold = smoothedZOffset / Z_OFFSET_SCALE;
+            // Get raw values for visualization
+            const zOffset = this.zOffset[handIndex];
+            const pinchDist = this.pinchDist[handIndex];
+            const pinchThreshold = zOffset / Z_OFFSET_SCALE;
 
             // Calculate everything in offscreen coordinates first
             const midX = (thumb.x + indexFinger.x) / 2;
             const midY = (thumb.y + indexFinger.y) / 2;
 
-            // Draw line between thumb and index finger
-            this.ctx.beginPath();
-            this.ctx.moveTo(thumb.x * sx, thumb.y * sy);
-            this.ctx.lineTo(indexFinger.x * sx, indexFinger.y * sy);
-            this.ctx.strokeStyle = 'black';
-            this.ctx.lineWidth = 2;
-            this.ctx.stroke();
+            // Draw on both canvases
+            [this.leftCtx, this.rightCtx].forEach(ctx => {
+                // Draw line between thumb and index finger
+                ctx.beginPath();
+                ctx.moveTo(thumb.x * sx, thumb.y * sy);
+                ctx.lineTo(indexFinger.x * sx, indexFinger.y * sy);
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 2;
+                ctx.stroke();
 
-            // Calculate line length for circle diameter
-            const lineLength = Math.sqrt(
-                Math.pow((indexFinger.x - thumb.x) * sx, 2) + 
-                Math.pow((indexFinger.y - thumb.y) * sy, 2)
-            );
+                // Calculate line length for circle diameter
+                const lineLength = Math.sqrt(
+                    Math.pow((indexFinger.x - thumb.x) * sx, 2) + 
+                    Math.pow((indexFinger.y - thumb.y) * sy, 2)
+                );
 
-            // Draw circle with diameter equal to line length
-            this.ctx.beginPath();
-            this.ctx.arc(midX * sx, midY * sy, lineLength / 2, 0, 2 * Math.PI);
-            this.ctx.strokeStyle = 'black';
-            this.ctx.lineWidth = 1;
-            this.ctx.stroke();
+                // Draw circle with diameter equal to line length
+                ctx.beginPath();
+                ctx.arc(midX * sx, midY * sy, lineLength / 2, 0, 2 * Math.PI);
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.stroke();
 
-            // Draw circle with diameter equal to line smoothedZOffset
-            this.ctx.beginPath();
-            this.ctx.arc(midX * sx, midY * sy, smoothedZOffset, 0, 2 * Math.PI);
-            this.ctx.strokeStyle = 'black';
-            this.ctx.lineWidth = 1;
-            this.ctx.stroke();
+                // Draw circle with diameter equal to zOffset
+                ctx.beginPath();
+                ctx.arc(midX * sx, midY * sy, zOffset, 0, 2 * Math.PI);
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 1;
+                ctx.stroke();
 
-            // Draw dot at midpoint, yellow if pinching, size scaled by zOffset
-            const dotSize = smoothedZOffset / 5; // Scale factor to make dot visible but not too large
-            this.ctx.beginPath();
-            this.ctx.arc(midX * sx, midY * sy, dotSize, 0, 2 * Math.PI);
-            this.ctx.fillStyle = this.pinchActive[handIndex] ? 'yellow' : 'black';
-            this.ctx.fill();
+                // Draw dot at midpoint, yellow if pinching, size scaled by zOffset
+                const dotSize = zOffset / 5; // Scale factor to make dot visible but not too large
+                ctx.beginPath();
+                ctx.arc(midX * sx, midY * sy, dotSize, 0, 2 * Math.PI);
+                ctx.fillStyle = this.pinchActive[handIndex] ? 'yellow' : 'black';
+                ctx.fill();
+            });
 
-            // Display smoothed zOffset and pinchDist values
-            this.ctx.fillStyle = 'black';
-            this.ctx.fillRect(5, 5, 400, 30); // Add black background
-            this.ctx.fillStyle = 'white';
-            this.ctx.font = '16px Arial';
+            // Display raw values
+            this.leftCtx.fillStyle = 'black';
+            this.leftCtx.fillRect(5, 5, 400, 30); // Add black background
+            this.leftCtx.fillStyle = 'white';
+            this.leftCtx.font = '16px Arial';
             if (handIndex === 0) { // Left hand
-                this.ctx.fillText(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | threshold: ${Math.round(pinchThreshold)}`, 10, 20);
+                this.leftCtx.fillText(`zOffset: ${Math.round(zOffset)} | pinchDist: ${Math.round(pinchDist)} | threshold: ${Math.round(pinchThreshold)}`, 10, 20);
             } else if (handIndex === 1) { // Right hand
-                this.ctx.fillRect(this.overlayCanvas.width - 405, 5, 400, 30); // Add black background
-                this.ctx.fillText(`zOffset: ${Math.round(smoothedZOffset)} | pinchDist: ${Math.round(smoothedPinchDist)} | threshold: ${Math.round(pinchThreshold)}`, this.overlayCanvas.width - 300, 20);
+                this.leftCtx.fillRect(this.leftHandCanvas.width - 405, 5, 400, 30); // Add black background
+                this.leftCtx.fillText(`zOffset: ${Math.round(zOffset)} | pinchDist: ${Math.round(pinchDist)} | threshold: ${Math.round(pinchThreshold)}`, this.leftHandCanvas.width - 300, 20);
             }
         });
     }
@@ -123,39 +129,25 @@ class HandTracker {
             // Process each detected hand
             this.hands.forEach((hand, handIndex) => {
                 // Calculate and update z-offset
-                const zOffset = calculateZOffset(hand);
-                updateBuffer(this.zOffsetBuffers[handIndex], zOffset);
+                this.zOffset[handIndex] = calculateZOffset(hand);
 
                 // Calculate and update pinch distance
-                const pinchDist = calculatePinchDistance(hand);
-                updateBuffer(this.pinchDistBuffers[handIndex], pinchDist);
-
-                // Get smoothed values
-                const smoothedZOffset = getSmoothedValue(this.zOffsetBuffers[handIndex]);
-                const smoothedPinchDist = getSmoothedValue(this.pinchDistBuffers[handIndex]);
+                this.pinchDist[handIndex] = calculatePinchDistance(hand);
 
                 // Calculate pinch threshold based on z-offset
-                const pinchThreshold = smoothedZOffset / Z_OFFSET_SCALE;
+                const pinchThreshold = this.zOffset[handIndex] / Z_OFFSET_SCALE;
 
                 // Check for pinch
-                if (smoothedPinchDist < pinchThreshold) {
+                if (this.pinchDist[handIndex] < pinchThreshold) {
                     const currentTime = Date.now();
                     
                     if (!this.pinchActive[handIndex] && (currentTime - this.lastPinchTime[handIndex] > DEBOUNCE_TIME)) {
                         // Set pinch as active and update time
                         this.pinchActive[handIndex] = true;
                         this.lastPinchTime[handIndex] = currentTime;
-                        console.log('Pinch activated for hand:', handIndex);
                     }
                 } else {
                     // Reset pinch state when pinch is released
-                    if (this.pinchActive[handIndex]) {
-                        console.log('Pinch released for hand:', handIndex, {
-                            reason: 'fingers moved apart',
-                            smoothedPinchDist,
-                            pinchThreshold
-                        });
-                    }
                     this.pinchActive[handIndex] = false;
                 }
             });
@@ -182,8 +174,8 @@ class HandTracker {
             if (!hand || !hand.keypoints) return null;
             const thumb = hand.keypoints[4];
             const indexFinger = hand.keypoints[8];
-            const sx = this.overlayCanvas.width / OFF_W;
-            const sy = this.overlayCanvas.height / OFF_H;
+            const sx = this.leftHandCanvas.width / OFF_W;
+            const sy = this.leftHandCanvas.height / OFF_H;
             return {
                 thumb: { x: thumb.x * sx, y: thumb.y * sy },
                 indexFinger: { x: indexFinger.x * sx, y: indexFinger.y * sy }

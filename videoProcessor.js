@@ -1,23 +1,64 @@
 class VideoProcessor {
-    constructor(videoElement, overlayCanvas, shaderCanvas, shaderOverlayCanvas) {
+    constructor(videoElement, gridCanvas, handCanvas, shaderCanvas, shaderOverlayCanvas, rightHandCanvas) {
         this.video = videoElement;
-        this.overlayCanvas = overlayCanvas;
+        this.gridCanvas = gridCanvas;
+        this.handCanvas = handCanvas;
         this.shaderCanvas = shaderCanvas;
         this.shaderOverlayCanvas = shaderOverlayCanvas;
+        this.rightHandCanvas = rightHandCanvas;
         this.glContext = new WebGLContext(shaderCanvas);
-        this.ctx = overlayCanvas.getContext('2d');
+        this.ctx = gridCanvas.getContext('2d');
         this.shaderCtx = shaderOverlayCanvas.getContext('2d');
-        this.gridSize = 4;
-        this.squareSize = 0;
 
-        // Initialize hand tracker
-        this.handTracker = new HandTracker(videoElement, overlayCanvas);
+        // Initialize managers
+        this.handTracker = new HandTracker(videoElement, handCanvas, rightHandCanvas);
+        this.gridManager = new GridManager(gridCanvas, shaderOverlayCanvas);
 
-        // Grid rotation state
-        this.gridRotation = Array(4).fill().map(() => Array(4).fill(0));
-        this.flashTimers = Array(4).fill().map(() => Array(4).fill(0));
+        // Track visibility state
+        this.leftElementsVisible = true;
 
         this.setup();
+        this.setupKeyboardControls();
+    }
+
+    setupKeyboardControls() {
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'h') { // 'h' for hide
+                this.toggleLeftElements();
+            }
+        });
+    }
+
+    toggleLeftElements() {
+        this.leftElementsVisible = !this.leftElementsVisible;
+        
+        // Get the containers
+        const videoContainer = document.getElementById('videoContainer');
+        const shaderContainer = document.getElementById('shaderContainer');
+        
+        // Toggle visibility of left-hand elements
+        this.video.style.display = this.leftElementsVisible ? 'block' : 'none';
+        this.gridCanvas.style.display = this.leftElementsVisible ? 'block' : 'none';
+        this.handCanvas.style.display = this.leftElementsVisible ? 'block' : 'none';
+        
+        // Adjust container widths
+        if (this.leftElementsVisible) {
+            videoContainer.style.width = '50%';
+            shaderContainer.style.width = '50%';
+        } else {
+            videoContainer.style.width = '0%';
+            shaderContainer.style.width = '100%';
+        }
+        
+        // If left elements are hidden, we should still process the video for the right side
+        if (!this.leftElementsVisible) {
+            this.video.style.opacity = '0'; // Make video invisible but still processing
+        } else {
+            this.video.style.opacity = '1';
+        }
+
+        // Update canvas sizes after container resize
+        this.updateCanvasSizes();
     }
 
     async setup() {
@@ -43,6 +84,7 @@ class VideoProcessor {
 
             // Then setup hand tracking in the background
             await this.handTracker.setup();
+            this.gridManager.setup();
         } catch (error) {
             console.error('Error setting up video:', error);
         }
@@ -66,6 +108,7 @@ class VideoProcessor {
             uniform vec2 u_squarePos[16];
             uniform vec2 u_squareSize[16];
             uniform float u_squareRotation[16];
+            uniform float u_squareCumulativeRotation[16];
             
             vec2 rotate(vec2 coord, float angle) {
                 float s = sin(angle);
@@ -75,12 +118,65 @@ class VideoProcessor {
                     coord.x * s + coord.y * c
                 );
             }
+
+            // Convert RGB to HSL
+            vec3 rgb2hsl(vec3 c) {
+                float h = 0.0;
+                float s = 0.0;
+                float l = 0.0;
+                float r = c.r;
+                float g = c.g;
+                float b = c.b;
+                float cmin = min(r, min(g, b));
+                float cmax = max(r, max(g, b));
+                float delta = cmax - cmin;
+                
+                l = (cmax + cmin) / 2.0;
+                
+                if (delta == 0.0) {
+                    h = 0.0;
+                    s = 0.0;
+                } else {
+                    if (l < 0.5) {
+                        s = delta / (cmax + cmin);
+                    } else {
+                        s = delta / (2.0 - cmax - cmin);
+                    }
+                    
+                    if (r == cmax) {
+                        h = (g - b) / delta;
+                    } else if (g == cmax) {
+                        h = 2.0 + (b - r) / delta;
+                    } else {
+                        h = 4.0 + (r - g) / delta;
+                    }
+                    
+                    h = h / 6.0;
+                    if (h < 0.0) h += 1.0;
+                }
+                
+                return vec3(h, s, l);
+            }
+
+            // Convert HSL to RGB
+            vec3 hsl2rgb(vec3 c) {
+                vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+                return c.z + c.y * (rgb - 0.5) * (1.0 - abs(2.0 * c.z - 1.0));
+            }
             
             void main() {
                 vec2 coord = v_texCoord;
                 
                 // Flip the entire image horizontally
                 coord.x = 1.0 - coord.x;
+                
+                // Get the original color
+                vec4 color = texture2D(u_texture, coord);
+                
+                // Convert to HSL and desaturate the entire image
+                vec3 hsl = rgb2hsl(color.rgb);
+                hsl.y = 0.0; // Set saturation to 0 for grayscale
+                color.rgb = hsl2rgb(hsl);
                 
                 // Check each square
                 for (int i = 0; i < 16; i++) {
@@ -102,11 +198,28 @@ class VideoProcessor {
                         localCoord = localCoord + vec2(0.5);
                         
                         // Convert back to texture coordinates
-                        coord = u_squarePos[i] + localCoord * u_squareSize[i];
+                        vec2 rotatedCoord = u_squarePos[i] + localCoord * u_squareSize[i];
+                        
+                        // Get the original color at the rotated position
+                        vec4 originalColor = texture2D(u_texture, rotatedCoord);
+                        
+                        // Convert to HSL
+                        vec3 originalHsl = rgb2hsl(originalColor.rgb);
+                        
+                        // Adjust saturation based on cumulative rotation
+                        float cumulativeRotation = u_squareCumulativeRotation[i];
+                        // Map cumulative rotation to saturation, reaching 200% after 3 full rotations (6π)
+                        float saturation = cumulativeRotation / (6.0 * 3.14159);
+                        // Clamp between 0 and 2.0 (200%)
+                        saturation = clamp(saturation, 0.0, 2.0);
+                        originalHsl.y = saturation;
+                        
+                        // Convert back to RGB
+                        color.rgb = hsl2rgb(originalHsl);
                     }
                 }
                 
-                gl_FragColor = texture2D(u_texture, coord);
+                gl_FragColor = color;
             }
         `;
 
@@ -156,79 +269,20 @@ class VideoProcessor {
             videoHeight = videoWidth / videoAspect;
         }
 
-        this.overlayCanvas.width = videoWidth;
-        this.overlayCanvas.height = videoHeight;
+        this.gridCanvas.width = videoWidth;
+        this.gridCanvas.height = videoHeight;
+        this.handCanvas.width = videoWidth;
+        this.handCanvas.height = videoHeight;
         this.shaderCanvas.width = this.video.videoWidth;
         this.shaderCanvas.height = this.video.videoHeight;
         this.shaderOverlayCanvas.width = videoWidth;
         this.shaderOverlayCanvas.height = videoHeight;
+        this.rightHandCanvas.width = videoWidth;
+        this.rightHandCanvas.height = videoHeight;
 
         this.glContext.gl.viewport(0, 0, this.shaderCanvas.width, this.shaderCanvas.height);
-        this.drawSquares();
-    }
-
-    drawSquares() {
-        // Draw on left overlay
-        this.ctx.clearRect(0, 0, this.overlayCanvas.width, this.overlayCanvas.height);
-
-        // Calculate square size based on grid
-        const padding = 1; // pixels between squares
-        const totalPadding = padding * (this.gridSize + 1);
-        const availableWidth = this.overlayCanvas.width - totalPadding;
-        const availableHeight = this.overlayCanvas.height - totalPadding;
-        this.squareSize = Math.min(
-            availableWidth / this.gridSize,
-            availableHeight / this.gridSize
-        );
-
-        // Calculate total grid width and horizontal centering offset
-        const totalGridWidth = (this.squareSize * this.gridSize) + (padding * (this.gridSize - 1));
-        const horizontalOffset = (this.overlayCanvas.width - totalGridWidth) / 2;
-
-        // Draw grid of squares on left overlay
-        for (let row = 0; row < this.gridSize; row++) {
-            for (let col = 0; col < this.gridSize; col++) {
-                const x = horizontalOffset + padding + col * (this.squareSize + padding);
-                const y = padding + row * (this.squareSize + padding);
-
-                this.ctx.strokeStyle = 'white';
-                this.ctx.lineWidth = 1;
-                this.ctx.strokeRect(x, y, this.squareSize, this.squareSize);
-            }
-        }
-
-        // Draw on right overlay
-        this.shaderCtx.clearRect(0, 0, this.shaderOverlayCanvas.width, this.shaderOverlayCanvas.height);
-
-        // Draw grid of squares on right overlay
-        for (let row = 0; row < this.gridSize; row++) {
-            for (let col = 0; col < this.gridSize; col++) {
-                const x = horizontalOffset + padding + col * (this.squareSize + padding);
-                const y = padding + row * (this.squareSize + padding);
-
-                this.shaderCtx.strokeStyle = 'white';
-                this.shaderCtx.lineWidth = 1;
-                this.shaderCtx.strokeRect(x, y, this.squareSize, this.squareSize);
-            }
-        }
-    }
-
-    // Helper function to get grid cell index from screen coordinates
-    getGridCellIndex(x, y) {
-        const padding = 1;
-        const totalGridWidth = (this.squareSize * this.gridSize) + (padding * (this.gridSize - 1));
-        const horizontalOffset = (this.overlayCanvas.width - totalGridWidth) / 2;
-
-        // Convert screen coordinates to grid coordinates
-        const gridX = Math.floor((x - horizontalOffset - padding) / (this.squareSize + padding));
-        const gridY = Math.floor((y - padding) / (this.squareSize + padding));
-
-        // Return null if outside grid
-        if (gridX < 0 || gridX >= this.gridSize || gridY < 0 || gridY >= this.gridSize) {
-            return null;
-        }
-
-        return { row: gridY, col: gridX };
+        this.gridManager.updateCanvasSizes();
+        this.gridManager.drawGrid();
     }
 
     render() {
@@ -244,41 +298,24 @@ class VideoProcessor {
             this.glContext.setAttribute('a_position', this.glContext.buffers.position, 2);
             this.glContext.setAttribute('a_texCoord', this.glContext.buffers.texCoord, 2);
 
-            // Calculate positions and rotations for all squares
-            const squarePositions = [];
-            const squareSizes = [];
-            const squareRotations = [];
-            const padding = 1;
-
-            // Calculate total grid width and horizontal centering offset
-            const totalGridWidth = (this.squareSize * this.gridSize) + (padding * (this.gridSize - 1));
-            const horizontalOffset = (this.overlayCanvas.width - totalGridWidth) / 2;
-
-            for (let row = 0; row < this.gridSize; row++) {
-                for (let col = 0; col < this.gridSize; col++) {
-                    const x = (horizontalOffset + padding + col * (this.squareSize + padding)) / this.overlayCanvas.width;
-                    const y = (padding + row * (this.squareSize + padding)) / this.overlayCanvas.height;
-                    const width = this.squareSize / this.overlayCanvas.width;
-                    const height = this.squareSize / this.overlayCanvas.height;
-
-                    squarePositions.push(x, y);
-                    squareSizes.push(width, height);
-                    squareRotations.push(this.gridRotation[row][col]);
-                }
-            }
+            // Get grid data from GridManager
+            const gridData = this.gridManager.getGridData();
 
             // Set uniform arrays
             for (let i = 0; i < 16; i++) {
                 this.glContext.setUniform(`u_squarePos[${i}]`, '2f',
-                    squarePositions[i * 2],
-                    squarePositions[i * 2 + 1]
+                    gridData.positions[i * 2],
+                    gridData.positions[i * 2 + 1]
                 );
                 this.glContext.setUniform(`u_squareSize[${i}]`, '2f',
-                    squareSizes[i * 2],
-                    squareSizes[i * 2 + 1]
+                    gridData.sizes[i * 2],
+                    gridData.sizes[i * 2 + 1]
                 );
                 this.glContext.setUniform(`u_squareRotation[${i}]`, '1f',
-                    squareRotations[i]
+                    gridData.rotations[i]
+                );
+                this.glContext.setUniform(`u_squareCumulativeRotation[${i}]`, '1f',
+                    gridData.cumulativeRotations[i]
                 );
             }
 
@@ -286,6 +323,8 @@ class VideoProcessor {
 
             // Detect and draw hands
             this.handTracker.detectHands().then(hands => {
+                if (!hands) return; // Skip if no hands detected
+                
                 this.handTracker.drawHands(hands);
                 
                 // Update grid rotations based on pinch state
@@ -297,14 +336,17 @@ class VideoProcessor {
                         if (position) {
                             const midX = (position.thumb.x + position.indexFinger.x) / 2;
                             const midY = (position.thumb.y + position.indexFinger.y) / 2;
-                            const gridCell = this.getGridCellIndex(midX, midY);
+                            const gridCell = this.gridManager.getGridCellIndex(midX, midY);
                             if (gridCell) {
-                                this.gridRotation[gridCell.row][gridCell.col] =
-                                    (this.gridRotation[gridCell.row][gridCell.col] + 90) % 360;
+                                // Use left hand (index 0) for counter-clockwise rotation
+                                const isLeftHand = handIndex === 0;
+                                this.gridManager.rotateCell(gridCell.row, gridCell.col, 5, isLeftHand);
                             }
                         }
                     }
                 });
+            }).catch(error => {
+                console.error('Error in hand detection:', error);
             });
         }
 

@@ -1,9 +1,9 @@
 // Hand Tracking Configuration
 const MODEL_TYPE = 'lite';  // 'lite' for speed, 'full' for accuracy
-const MAX_HANDS = 2;        // number of hands to detect
+const MAX_HANDS = 4;        // number of hands to detect
 const OFF_W = 256;          // reduced processing width for better performance
 const OFF_H = 192;          // reduced processing height for better performance
-const DETECTION_INTERVAL = 1; // process every 3 frames
+const DETECTION_INTERVAL = 5; // process every 3 frames
 
 // Pinch detection configuration
 const SMOOTHING_WINDOW_SIZE = 5; // Size of the smoothing window
@@ -65,7 +65,8 @@ function updateBuffer(buffer, value) {
     }
 }
 
-// Helper function to calculate z-offset from hand landmarks
+//measure how big the hand is in the image and use this as an approximation
+//for closeness to the camera, ie position along the z-axis.
 function calculateZOffset(hand) {
     if (!hand || !hand.keypoints) return 0;
 

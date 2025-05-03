@@ -15,6 +15,7 @@
     <script src="../webglContext.js"></script>
     <script src="../handTracking.js"></script>
     <script src="../handTracker.js"></script>
+    <script src="../gridManager.js"></script>
     <script src="../videoProcessor.js"></script>
     <script src="../main.js"></script>
     <style>
@@ -47,7 +48,14 @@
 
         .overlay {
             pointer-events: none;
+        }
+
+        .grid-overlay {
             z-index: 1;
+        }
+
+        .hand-overlay {
+            z-index: 2;
         }
 
         #video {
@@ -64,11 +72,13 @@
 <body>
     <div id="videoContainer" class="container">
         <video id="video" autoplay playsinline></video>
-        <canvas id="overlayCanvas" class="overlay"></canvas>
+        <canvas id="gridCanvas" class="overlay grid-overlay"></canvas>
+        <canvas id="handCanvas" class="overlay hand-overlay"></canvas>
     </div>
     <div id="shaderContainer" class="container">
         <canvas id="canvas"></canvas>
         <canvas id="shaderOverlayCanvas" class="overlay"></canvas>
+        <canvas id="rightHandCanvas" class="overlay hand-overlay"></canvas>
     </div>
 </body>
 
