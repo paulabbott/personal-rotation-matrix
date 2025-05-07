@@ -21,6 +21,9 @@ class HandTracker {
         this.pinchActive = [false, false]; // Track pinch state for each hand
         this.lastPinchTime = [0, 0]; // Track the last pinch time for each hand
         this.lastPinchCell = [null, null]; // Track the last cell where pinch occurred
+        
+        // Handedness detection
+        this.handedness = [null, null]; // Track handedness for each hand
     }
 
     async setup() {
@@ -109,6 +112,32 @@ class HandTracker {
         });
     }
 
+    detectHandedness(hand) {
+        if (!hand || !hand.keypoints) return null;
+        
+        // Get key points for handedness detection
+        const wrist = hand.keypoints[0];
+        const thumbCMC = hand.keypoints[1];  // Thumb base
+        const pinkyMCP = hand.keypoints[17]; // Pinky base
+        
+        // Calculate the cross product of vectors from wrist to thumb and wrist to pinky
+        // This will be positive for right hand and negative for left hand
+        const vector1 = {
+            x: thumbCMC.x - wrist.x,
+            y: thumbCMC.y - wrist.y
+        };
+        const vector2 = {
+            x: pinkyMCP.x - wrist.x,
+            y: pinkyMCP.y - wrist.y
+        };
+        
+        // Cross product in 2D: v1.x * v2.y - v1.y * v2.x
+        const crossProduct = vector1.x * vector2.y - vector1.y * vector2.x;
+        
+        // Since the camera is mirrored, we need to invert the result
+        return crossProduct > 0 ? 'left' : 'right';
+    }
+
     async detectHands() {
         if (!this.detector) return;
 
@@ -128,6 +157,9 @@ class HandTracker {
 
             // Process each detected hand
             this.hands.forEach((hand, handIndex) => {
+                // Detect handedness
+                this.handedness[handIndex] = this.detectHandedness(hand);
+
                 // Calculate and update z-offset
                 this.zOffset[handIndex] = calculateZOffset(hand);
 
@@ -168,9 +200,9 @@ class HandTracker {
         };
     }
 
-    // Getter for hand positions
+    // Getter for hand positions with handedness
     getHandPositions() {
-        return this.hands.map(hand => {
+        return this.hands.map((hand, index) => {
             if (!hand || !hand.keypoints) return null;
             const thumb = hand.keypoints[4];
             const indexFinger = hand.keypoints[8];
@@ -178,7 +210,8 @@ class HandTracker {
             const sy = this.leftHandCanvas.height / OFF_H;
             return {
                 thumb: { x: thumb.x * sx, y: thumb.y * sy },
-                indexFinger: { x: indexFinger.x * sx, y: indexFinger.y * sy }
+                indexFinger: { x: indexFinger.x * sx, y: indexFinger.y * sy },
+                handedness: this.handedness[index]
             };
         });
     }

@@ -25,6 +25,8 @@ class VideoProcessor {
         document.addEventListener('keydown', (event) => {
             if (event.key === 'h') { // 'h' for hide
                 this.toggleLeftElements();
+            } else if (event.key === 'r') { // 'r' for reset
+                this.resetAll();
             }
         });
     }
@@ -59,6 +61,17 @@ class VideoProcessor {
 
         // Update canvas sizes after container resize
         this.updateCanvasSizes();
+    }
+
+    resetAll() {
+        // Reset all rotations and cumulative rotations
+        for (let row = 0; row < this.gridManager.gridSize; row++) {
+            for (let col = 0; col < this.gridManager.gridSize; col++) {
+                this.gridManager.gridRotation[row][col] = 0;
+                this.gridManager.cumulativeRotation[row][col] = 0;
+            }
+        }
+        console.log('All rotations have been reset');
     }
 
     async setup() {
@@ -338,8 +351,8 @@ class VideoProcessor {
                             const midY = (position.thumb.y + position.indexFinger.y) / 2;
                             const gridCell = this.gridManager.getGridCellIndex(midX, midY);
                             if (gridCell) {
-                                // Use left hand (index 0) for counter-clockwise rotation
-                                const isLeftHand = handIndex === 0;
+                                // Use handedness to determine rotation direction
+                                const isLeftHand = position.handedness === 'left';
                                 this.gridManager.rotateCell(gridCell.row, gridCell.col, 5, isLeftHand);
                             }
                         }

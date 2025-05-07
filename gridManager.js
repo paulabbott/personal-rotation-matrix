@@ -32,6 +32,7 @@ class GridManager {
     drawGrid() {
         // Draw on left overlay
         this.ctx.clearRect(0, 0, this.gridCanvas.width, this.gridCanvas.height);
+        this.ctx.globalAlpha = 0.25; // Set 25% opacity
 
         // Calculate total grid width and horizontal centering offset
         const totalGridWidth = (this.squareSize * this.gridSize) + (this.padding * (this.gridSize - 1));
@@ -51,8 +52,12 @@ class GridManager {
             }
         }
 
+        // Reset opacity
+        this.ctx.globalAlpha = 1.0;
+
         // Draw on right overlay
         this.shaderCtx.clearRect(0, 0, this.shaderOverlayCanvas.width, this.shaderOverlayCanvas.height);
+        this.shaderCtx.globalAlpha = 0.25; // Set 25% opacity
 
         // Draw grid of squares on right overlay
         for (let row = 0; row < this.gridSize; row++) {
@@ -65,6 +70,9 @@ class GridManager {
                 this.shaderCtx.strokeRect(x, y, this.squareSize, this.squareSize);
             }
         }
+
+        // Reset opacity
+        this.shaderCtx.globalAlpha = 1.0;
     }
 
     getGridCellIndex(x, y) {
