@@ -4,20 +4,21 @@ import { WebGLContext } from './webglContext.js';
 import { GridManager } from './gridManager.js';
 
 export class VideoProcessor {
-    constructor(videoElement, gridCanvas, handCanvas, shaderCanvas, shaderOverlayCanvas, rightHandCanvas) {
+    constructor(videoElement, gridCanvas, handCanvas, shaderCanvas, shaderOverlayCanvas, rightHandCanvas, gridSize = 4) {
         this.video = videoElement;
         this.gridCanvas = gridCanvas;
         this.handCanvas = handCanvas;
         this.shaderCanvas = shaderCanvas;
         this.shaderOverlayCanvas = shaderOverlayCanvas;
         this.rightHandCanvas = rightHandCanvas;
+        this.gridSize = gridSize;
         this.glContext = new WebGLContext(shaderCanvas);
         this.ctx = gridCanvas.getContext('2d');
         this.shaderCtx = shaderOverlayCanvas.getContext('2d');
 
         // Initialize managers
         this.handTracker = new HandTracker(videoElement, handCanvas, rightHandCanvas);
-        this.gridManager = new GridManager(gridCanvas, shaderOverlayCanvas);
+        this.gridManager = new GridManager(gridCanvas, shaderOverlayCanvas, gridSize);
 
         // Track visibility state
         this.leftElementsVisible = true;
@@ -123,10 +124,10 @@ export class VideoProcessor {
             precision mediump float;
             varying vec2 v_texCoord;
             uniform sampler2D u_texture;
-            uniform vec2 u_squarePos[16];
-            uniform vec2 u_squareSize[16];
-            uniform float u_squareRotation[16];
-            uniform float u_squareCumulativeRotation[16];
+            uniform vec2 u_squarePos[${this.gridSize * this.gridSize}];
+            uniform vec2 u_squareSize[${this.gridSize * this.gridSize}];
+            uniform float u_squareRotation[${this.gridSize * this.gridSize}];
+            uniform float u_squareCumulativeRotation[${this.gridSize * this.gridSize}];
             
             vec2 rotate(vec2 coord, float angle) {
                 float s = sin(angle);
@@ -197,7 +198,7 @@ export class VideoProcessor {
                 color.rgb = hsl2rgb(hsl);
                 
                 // Check each square
-                for (int i = 0; i < 16; i++) {
+                for (int i = 0; i < ${this.gridSize * this.gridSize}; i++) {
                     if (coord.x >= u_squarePos[i].x && 
                         coord.x <= u_squarePos[i].x + u_squareSize[i].x &&
                         coord.y >= u_squarePos[i].y && 
@@ -320,7 +321,8 @@ export class VideoProcessor {
             const gridData = this.gridManager.getGridData();
 
             // Set uniform arrays
-            for (let i = 0; i < 16; i++) {
+            const totalSquares = this.gridSize * this.gridSize;
+            for (let i = 0; i < totalSquares; i++) {
                 this.glContext.setUniform(`u_squarePos[${i}]`, '2f',
                     gridData.positions[i * 2],
                     gridData.positions[i * 2 + 1]

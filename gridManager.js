@@ -1,5 +1,5 @@
 export class GridManager {
-    constructor(gridCanvas, shaderOverlayCanvas, gridSize = 4) {
+    constructor(gridCanvas, shaderOverlayCanvas, gridSize = 8) {
         this.gridCanvas = gridCanvas;
         this.shaderOverlayCanvas = shaderOverlayCanvas;
         this.ctx = gridCanvas.getContext('2d');
