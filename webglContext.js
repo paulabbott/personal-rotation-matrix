@@ -1,4 +1,4 @@
-class WebGLContext {
+export class WebGLContext {
     constructor(canvas) {
         this.canvas = canvas;
         this.gl = canvas.getContext('webgl');

@@ -1,4 +1,4 @@
-class GridManager {
+export class GridManager {
     constructor(gridCanvas, shaderOverlayCanvas, gridSize = 4) {
         this.gridCanvas = gridCanvas;
         this.shaderOverlayCanvas = shaderOverlayCanvas;
@@ -102,7 +102,7 @@ class GridManager {
             this.gridRotation[row][col] += clockwise ? -angleInRadians : angleInRadians;
             // Update cumulative rotation (always positive)
             this.cumulativeRotation[row][col] += Math.abs(angleInRadians);
-            console.log(`Rotation: ${this.gridRotation[row][col]}, Cumulative: ${this.cumulativeRotation[row][col]}`);
+            // console.log(`Rotation: ${this.gridRotation[row][col]}, Cumulative: ${this.cumulativeRotation[row][col]}`);
             return true;
         }
         return false;

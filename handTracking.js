@@ -1,18 +1,20 @@
 // Hand Tracking Configuration
-const MODEL_TYPE = 'lite';  // 'lite' for speed, 'full' for accuracy
-const MAX_HANDS = 4;        // number of hands to detect
-const OFF_W = 256;          // reduced processing width for better performance
-const OFF_H = 192;          // reduced processing height for better performance
-const DETECTION_INTERVAL = 5; // process every 3 frames
+export const MODEL_TYPE = 'full';  // 'lite' for speed, 'full' for accuracy
+export const MAX_HANDS = 2;        // number of hands to detect
+export const OFF_W = 256;          // reduced processing width for better performance
+export const OFF_H = 192;          // reduced processing height for better performance
+export const DETECTION_INTERVAL = 5; // process every 3 frames
 
 // Pinch detection configuration
-const SMOOTHING_WINDOW_SIZE = 5; // Size of the smoothing window
-const DEBOUNCE_TIME = 300; // Debounce time in milliseconds
-const FLASH_DURATION = 200; // Flash duration in milliseconds
-const Z_OFFSET_SCALE = 1.5; // Scale factor for z-offset based calculations
+export const SMOOTHING_WINDOW_SIZE = 5; // Size of the smoothing window
+export const DEBOUNCE_TIME = 300; // Debounce time in milliseconds
+export const FLASH_DURATION = 200; // Flash duration in milliseconds
+export const Z_DIST_SCALE = 1; // Scale factor for z-distance based calculations
+export const FIXED_PINCH_THRESHOLD = 25; // Base threshold for pinch detection in pixels
+export const SCALE_FACTOR = 0.5; // Factor to scale the direct relationship
 
 // pre-defined skeleton connections (21-point hand)
-const skeleton = [
+export const skeleton = [
     [0, 1], [1, 2], [2, 3], [3, 4],     // thumb
     [0, 5], [5, 6], [6, 7], [7, 8],     // index finger
     [0, 9], [9, 10], [10, 11], [11, 12], // middle finger
@@ -20,12 +22,12 @@ const skeleton = [
     [0, 17], [17, 18], [18, 19], [19, 20]  // pinky
 ];
 
-async function setupBackend() {
+export async function setupBackend() {
     await tf.setBackend('webgl');
     await tf.ready();
 }
 
-async function setupCamera(videoElement) {
+export async function setupCamera(videoElement) {
     const stream = await navigator.mediaDevices.getUserMedia({
         video: {
             facingMode: 'user',
@@ -39,7 +41,7 @@ async function setupCamera(videoElement) {
     return videoElement;
 }
 
-async function createDetector() {
+export async function createDetector() {
     return handPoseDetection.createDetector(
         handPoseDetection.SupportedModels.MediaPipeHands,
         {
@@ -52,13 +54,13 @@ async function createDetector() {
 }
 
 // Helper function to calculate smoothed value from buffer
-function getSmoothedValue(buffer) {
+export function getSmoothedValue(buffer) {
     if (buffer.length === 0) return 0;
     return buffer.reduce((sum, val) => sum + val, 0) / buffer.length;
 }
 
 // Helper function to update buffer with new value
-function updateBuffer(buffer, value) {
+export function updateBuffer(buffer, value) {
     buffer.push(value);
     if (buffer.length > SMOOTHING_WINDOW_SIZE) {
         buffer.shift();
@@ -67,7 +69,7 @@ function updateBuffer(buffer, value) {
 
 //measure how big the hand is in the image and use this as an approximation
 //for closeness to the camera, ie position along the z-axis.
-function calculateZOffset(hand) {
+export function calculateZDist(hand) {
     if (!hand || !hand.keypoints) return 0;
 
     // Use wrist (0), index finger base (5), and pinky base (17) to estimate hand size
@@ -89,7 +91,7 @@ function calculateZOffset(hand) {
 }
 
 // Helper function to calculate pinch distance
-function calculatePinchDistance(hand) {
+export function calculatePinchDistance(hand) {
     if (!hand || !hand.keypoints) return Infinity;
 
     // Use thumb tip (4) and index finger tip (8)

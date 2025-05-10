@@ -1,4 +1,9 @@
-class VideoProcessor {
+// Import required classes
+import { HandTracker } from './handTracker.js';
+import { WebGLContext } from './webglContext.js';
+import { GridManager } from './gridManager.js';
+
+export class VideoProcessor {
     constructor(videoElement, gridCanvas, handCanvas, shaderCanvas, shaderOverlayCanvas, rightHandCanvas) {
         this.video = videoElement;
         this.gridCanvas = gridCanvas;

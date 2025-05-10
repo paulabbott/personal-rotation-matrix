@@ -1,3 +1,6 @@
+// Import VideoProcessor
+import { VideoProcessor } from './videoProcessor.js';
+
 // Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
     const video = document.getElementById('video');

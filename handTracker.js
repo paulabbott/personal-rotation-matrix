@@ -1,4 +1,36 @@
-class HandTracker {
+// Import functions and constants from handTracking.js
+import {
+    MODEL_TYPE,
+    MAX_HANDS,
+    OFF_W,
+    OFF_H,
+    DETECTION_INTERVAL,
+    SMOOTHING_WINDOW_SIZE,
+    DEBOUNCE_TIME,
+    FLASH_DURATION,
+    Z_DIST_SCALE,
+    FIXED_PINCH_THRESHOLD,
+    SCALE_FACTOR,
+    skeleton,
+    setupBackend,
+    createDetector,
+    calculateZDist,
+    calculatePinchDistance,
+    getSmoothedValue,
+    updateBuffer
+} from './handTracking.js';
+
+// Normalize pinch distance based on z-distance
+const normalizePinch = (rawPinch, handSize) => {
+    // Add a small epsilon to prevent division by zero
+    const safeHandSize = Math.max(handSize, 1);
+    // Use a power function to better handle non-linear relationships
+    // The 1.7 power helps reduce the impact of larger z-distances
+    return (rawPinch / Math.pow(safeHandSize, 1.7)) * 1000;
+};
+
+// Export the HandTracker class
+export class HandTracker {
     constructor(videoElement, leftHandCanvas, rightHandCanvas) {
         this.video = videoElement;
         this.leftHandCanvas = leftHandCanvas;
@@ -16,11 +48,13 @@ class HandTracker {
         this.frameCount = 0;
 
         // Pinch detection state
-        this.zOffset = [0, 0]; // Raw z-offset values for each hand
+        this.handSize = [0, 0]; // Raw hand size values for each hand
         this.pinchDist = [0, 0]; // Raw pinch distance values for each hand
+        this.normPinchDist = [0, 0]; // Normalized pinch distances for each hand
         this.pinchActive = [false, false]; // Track pinch state for each hand
         this.lastPinchTime = [0, 0]; // Track the last pinch time for each hand
         this.lastPinchCell = [null, null]; // Track the last cell where pinch occurred
+        this.normPinchBuffers = [[], []]; // Buffers for smoothing normalized pinch distances
         
         // Handedness detection
         this.handedness = [null, null]; // Track handedness for each hand
@@ -52,16 +86,38 @@ class HandTracker {
             const indexFinger = hand.keypoints[8];
 
             // Get raw values for visualization
-            const zOffset = this.zOffset[handIndex];
+            const handSize = this.handSize[handIndex];
             const pinchDist = this.pinchDist[handIndex];
-            const pinchThreshold = zOffset / Z_OFFSET_SCALE;
+            const normPinchDist = this.normPinchDist[handIndex];
+            // Calculate threshold directly proportional to handSize
+            const pinchThreshold = FIXED_PINCH_THRESHOLD + (handSize * SCALE_FACTOR);
 
-            // Calculate everything in offscreen coordinates first
+            // Calculate everything in offscreen coordinates
             const midX = (thumb.x + indexFinger.x) / 2;
             const midY = (thumb.y + indexFinger.y) / 2;
 
             // Draw on both canvases
             [this.leftCtx, this.rightCtx].forEach(ctx => {
+                // Draw skeleton connections
+                skeleton.forEach(([i, j]) => {
+                    const p1 = hand.keypoints[i];
+                    const p2 = hand.keypoints[j];
+                    ctx.beginPath();
+                    ctx.moveTo(p1.x * sx, p1.y * sy);
+                    ctx.lineTo(p2.x * sx, p2.y * sy);
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+                });
+
+                // Draw landmarks
+                hand.keypoints.forEach(point => {
+                    ctx.beginPath();
+                    ctx.arc(point.x * sx, point.y * sy, 2, 0, 2 * Math.PI);
+                    ctx.fillStyle = 'black';
+                    ctx.fill();
+                });
+
                 // Draw line between thumb and index finger
                 ctx.beginPath();
                 ctx.moveTo(thumb.x * sx, thumb.y * sy);
@@ -70,28 +126,15 @@ class HandTracker {
                 ctx.lineWidth = 2;
                 ctx.stroke();
 
-                // Calculate line length for circle diameter
-                const lineLength = Math.sqrt(
-                    Math.pow((indexFinger.x - thumb.x) * sx, 2) + 
-                    Math.pow((indexFinger.y - thumb.y) * sy, 2)
-                );
-
-                // Draw circle with diameter equal to line length
+                // Draw circle with scaled threshold radius
                 ctx.beginPath();
-                ctx.arc(midX * sx, midY * sy, lineLength / 2, 0, 2 * Math.PI);
+                ctx.arc(midX * sx, midY * sy, pinchThreshold, 0, 2 * Math.PI);
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
 
-                // Draw circle with diameter equal to zOffset
-                ctx.beginPath();
-                ctx.arc(midX * sx, midY * sy, zOffset, 0, 2 * Math.PI);
-                ctx.strokeStyle = 'black';
-                ctx.lineWidth = 1;
-                ctx.stroke();
-
-                // Draw dot at midpoint, yellow if pinching, size scaled by zOffset
-                const dotSize = zOffset / 5; // Scale factor to make dot visible but not too large
+                // Draw dot at midpoint, yellow if pinching
+                const dotSize = 5; // Fixed size dot
                 ctx.beginPath();
                 ctx.arc(midX * sx, midY * sy, dotSize, 0, 2 * Math.PI);
                 ctx.fillStyle = this.pinchActive[handIndex] ? 'yellow' : 'black';
@@ -104,10 +147,10 @@ class HandTracker {
             this.leftCtx.fillStyle = 'white';
             this.leftCtx.font = '16px Arial';
             if (handIndex === 0) { // Left hand
-                this.leftCtx.fillText(`zOffset: ${Math.round(zOffset)} | pinchDist: ${Math.round(pinchDist)} | threshold: ${Math.round(pinchThreshold)}`, 10, 20);
+                this.leftCtx.fillText(`handSize: ${Math.round(handSize)} | pinchDist: ${Math.round(pinchDist)} | normPinch: ${Math.round(normPinchDist)} | threshold: ${Math.round(pinchThreshold)}`, 10, 20);
             } else if (handIndex === 1) { // Right hand
                 this.leftCtx.fillRect(this.leftHandCanvas.width - 405, 5, 400, 30); // Add black background
-                this.leftCtx.fillText(`zOffset: ${Math.round(zOffset)} | pinchDist: ${Math.round(pinchDist)} | threshold: ${Math.round(pinchThreshold)}`, this.leftHandCanvas.width - 300, 20);
+                this.leftCtx.fillText(`handSize: ${Math.round(handSize)} | pinchDist: ${Math.round(pinchDist)} | normPinch: ${Math.round(normPinchDist)} | threshold: ${Math.round(pinchThreshold)}`, this.leftHandCanvas.width - 300, 20);
             }
         });
     }
@@ -160,17 +203,17 @@ class HandTracker {
                 // Detect handedness
                 this.handedness[handIndex] = this.detectHandedness(hand);
 
-                // Calculate and update z-offset
-                this.zOffset[handIndex] = calculateZOffset(hand);
+                // Calculate and update hand size
+                this.handSize[handIndex] = calculateZDist(hand);
 
                 // Calculate and update pinch distance
                 this.pinchDist[handIndex] = calculatePinchDistance(hand);
 
-                // Calculate pinch threshold based on z-offset
-                const pinchThreshold = this.zOffset[handIndex] / Z_OFFSET_SCALE;
+                // Calculate normalized pinch distance
+                this.normPinchDist[handIndex] = normalizePinch(this.pinchDist[handIndex], this.handSize[handIndex]);
 
-                // Check for pinch
-                if (this.pinchDist[handIndex] < pinchThreshold) {
+                // Use normalized pinch distance for detection
+                if (this.normPinchDist[handIndex] < FIXED_PINCH_THRESHOLD) {
                     const currentTime = Date.now();
                     
                     if (!this.pinchActive[handIndex] && (currentTime - this.lastPinchTime[handIndex] > DEBOUNCE_TIME)) {
@@ -187,7 +230,6 @@ class HandTracker {
             return this.hands;
         } catch (error) {
             console.error('Error detecting hands:', error);
-            return [];
         }
     }
 
