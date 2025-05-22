@@ -39,6 +39,19 @@
             align-items: center;
         }
 
+        #videoContainer {
+            width: 0%;  /* Start with 0 width */
+        }
+
+        #shaderContainer {
+            width: 100%;  /* Start with full width */
+        }
+
+        #video, #gridCanvas, #handCanvas {
+            display: none;  /* Start hidden */
+            opacity: 0;  /* Start invisible */
+        }
+
         video,
         canvas {
             position: absolute;

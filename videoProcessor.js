@@ -21,7 +21,7 @@ export class VideoProcessor {
         this.gridManager = new GridManager(gridCanvas, shaderOverlayCanvas, gridSize);
 
         // Track visibility state
-        this.leftElementsVisible = false;
+        this.leftElementsVisible = false;  // Match the initial CSS state
 
         // Idle timer properties
         this.lastActivityTime = Date.now();
