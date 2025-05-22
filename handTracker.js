@@ -89,8 +89,8 @@ export class HandTracker {
             const handSize = this.handSize[handIndex];
             const pinchDist = this.pinchDist[handIndex];
             const normPinchDist = this.normPinchDist[handIndex];
-            // Calculate threshold directly proportional to handSize
-            const pinchThreshold = FIXED_PINCH_THRESHOLD + (handSize * SCALE_FACTOR);
+            // Calculate threshold as half of hand width
+            const pinchThreshold = handSize / 2;
 
             // Calculate everything in offscreen coordinates
             const midX = (thumb.x + indexFinger.x) / 2;
@@ -99,24 +99,24 @@ export class HandTracker {
             // Draw on both canvases
             [this.leftCtx, this.rightCtx].forEach(ctx => {
                 // Draw skeleton connections
-                skeleton.forEach(([i, j]) => {
-                    const p1 = hand.keypoints[i];
-                    const p2 = hand.keypoints[j];
-                    ctx.beginPath();
-                    ctx.moveTo(p1.x * sx, p1.y * sy);
-                    ctx.lineTo(p2.x * sx, p2.y * sy);
-                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
-                    ctx.lineWidth = 1;
-                    ctx.stroke();
-                });
+                // skeleton.forEach(([i, j]) => {
+                //     const p1 = hand.keypoints[i];
+                //     const p2 = hand.keypoints[j];
+                //     ctx.beginPath();
+                //     ctx.moveTo(p1.x * sx, p1.y * sy);
+                //     ctx.lineTo(p2.x * sx, p2.y * sy);
+                //     ctx.strokeStyle = 'rgba(0, 0, 0, 0.3)';
+                //     ctx.lineWidth = 1;
+                //     ctx.stroke();
+                // });
 
                 // Draw landmarks
-                hand.keypoints.forEach(point => {
-                    ctx.beginPath();
-                    ctx.arc(point.x * sx, point.y * sy, 2, 0, 2 * Math.PI);
-                    ctx.fillStyle = 'black';
-                    ctx.fill();
-                });
+                // hand.keypoints.forEach(point => {
+                //     ctx.beginPath();
+                //     ctx.arc(point.x * sx, point.y * sy, 2, 0, 2 * Math.PI);
+                //     ctx.fillStyle = 'black';
+                //     ctx.fill();
+                // });
 
                 // Draw line between thumb and index finger
                 ctx.beginPath();
@@ -128,7 +128,8 @@ export class HandTracker {
 
                 // Draw circle with scaled threshold radius
                 ctx.beginPath();
-                ctx.arc(midX * sx, midY * sy, pinchThreshold, 0, 2 * Math.PI);
+                // ctx.arc(midX * sx, midY * sy, pinchThreshold, 0, 2 * Math.PI);
+                ctx.arc(midX * sx, midY * sy, pinchThreshold * 1.5, 0, 2 * Math.PI);
                 ctx.strokeStyle = 'black';
                 ctx.lineWidth = 1;
                 ctx.stroke();
@@ -212,8 +213,13 @@ export class HandTracker {
                 // Calculate normalized pinch distance
                 this.normPinchDist[handIndex] = normalizePinch(this.pinchDist[handIndex], this.handSize[handIndex]);
 
-                // Use normalized pinch distance for detection
-                if (this.normPinchDist[handIndex] < FIXED_PINCH_THRESHOLD) {
+                // Calculate threshold as half of hand width
+                const pinchThreshold = this.handSize[handIndex] / 2;
+
+                console.log(this.pinchDist[handIndex], pinchThreshold);
+                
+                // Use scaled threshold for detection
+                if (this.pinchDist[handIndex] < pinchThreshold) {
                     const currentTime = Date.now();
                     
                     if (!this.pinchActive[handIndex] && (currentTime - this.lastPinchTime[handIndex] > DEBOUNCE_TIME)) {

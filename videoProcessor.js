@@ -23,8 +23,15 @@ export class VideoProcessor {
         // Track visibility state
         this.leftElementsVisible = true;
 
+        // Idle timer properties
+        this.lastActivityTime = Date.now();
+        this.idleTimer = null;
+        this.countdownTimer = null;
+        this.isCountdownActive = false;
+
         this.setup();
         this.setupKeyboardControls();
+        this.startIdleTimer();
     }
 
     setupKeyboardControls() {
@@ -33,7 +40,9 @@ export class VideoProcessor {
                 this.toggleLeftElements();
             } else if (event.key === 'r') { // 'r' for reset
                 this.resetAll();
+                this.startIdleTimer(); // Restart idle timer after manual reset
             }
+            this.updateActivity(); // Update activity on any key press
         });
     }
 
@@ -90,6 +99,11 @@ export class VideoProcessor {
                     height: { ideal: 720 }
                 }
             });
+            // const stream = await navigator.mediaDevices.getUserMedia({
+            //     video: {
+            //         facingMode: 'user'
+            //     }
+            // });
             this.video.srcObject = stream;
 
             await new Promise((resolve) => {
@@ -351,6 +365,7 @@ export class VideoProcessor {
                 hands.forEach((hand, handIndex) => {
                     const pinchState = this.handTracker.getPinchState(handIndex);
                     if (pinchState.isActive) {
+                        this.updateActivity(); // Update activity when pinching
                         const handPositions = this.handTracker.getHandPositions();
                         const position = handPositions[handIndex];
                         if (position) {
@@ -360,7 +375,7 @@ export class VideoProcessor {
                             if (gridCell) {
                                 // Use handedness to determine rotation direction
                                 const isLeftHand = position.handedness === 'left';
-                                this.gridManager.rotateCell(gridCell.row, gridCell.col, 5, isLeftHand);
+                                this.gridManager.rotateCell(gridCell.row, gridCell.col, 10, isLeftHand);
                             }
                         }
                     }
@@ -375,5 +390,65 @@ export class VideoProcessor {
 
     startRendering() {
         this.render();
+    }
+
+    startIdleTimer() {
+        // Clear any existing timers
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        if (this.countdownTimer) clearTimeout(this.countdownTimer);
+        
+        // Reset activity time
+        this.lastActivityTime = Date.now();
+        this.isCountdownActive = false;
+        
+        // Start new idle timer
+        this.idleTimer = setTimeout(() => {
+            this.startCountdown();
+        }, 20000); // 20 seconds
+    }
+
+    startCountdown() {
+        if (this.isCountdownActive) return;
+        
+        this.isCountdownActive = true;
+        this.showCountdownMessage('Resetting in 3 seconds...');
+        
+        this.countdownTimer = setTimeout(() => {
+            this.resetAll();
+            this.isCountdownActive = false;
+            this.startIdleTimer(); // Restart the idle timer after reset
+        }, 3000); // 3 seconds
+    }
+
+    showCountdownMessage(message) {
+        // Create or get the message element
+        let messageElement = document.getElementById('countdownMessage');
+        if (!messageElement) {
+            messageElement = document.createElement('div');
+            messageElement.id = 'countdownMessage';
+            messageElement.style.position = 'fixed';
+            messageElement.style.top = '50%';
+            messageElement.style.left = '50%';
+            messageElement.style.transform = 'translate(-50%, -50%)';
+            messageElement.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+            messageElement.style.color = 'white';
+            messageElement.style.padding = '20px';
+            messageElement.style.borderRadius = '10px';
+            messageElement.style.fontSize = '24px';
+            messageElement.style.zIndex = '1000';
+            document.body.appendChild(messageElement);
+        }
+        
+        messageElement.textContent = message;
+        messageElement.style.display = 'block';
+        
+        // Hide the message after 3 seconds
+        setTimeout(() => {
+            messageElement.style.display = 'none';
+        }, 3000);
+    }
+
+    updateActivity() {
+        this.startIdleTimer();
     }
 } 
